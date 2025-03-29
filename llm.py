@@ -18,10 +18,10 @@ warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 # --- Lazy Loading for litellm ---
 
 # Configure basic litellm settings globally
-AIDER_SITE_URL = "https://aider.chat" # Example URL, adjust if needed
-AIDER_APP_NAME = "AiderSimplified" # Example App Name
-os.environ["OR_SITE_URL"] = os.environ.get("OR_SITE_URL", AIDER_SITE_URL)
-os.environ["OR_APP_NAME"] = os.environ.get("OR_APP_NAME", AIDER_APP_NAME)
+EMIGO_SITE_URL = "https://github.com/MatthewZMD/emigo" # Example URL, adjust if needed
+EMIGO_APP_NAME = "Emigo" # Example App Name
+os.environ["OR_SITE_URL"] = os.environ.get("OR_SITE_URL", EMIGO_SITE_URL)
+os.environ["OR_APP_NAME"] = os.environ.get("OR_APP_NAME", EMIGO_APP_NAME)
 os.environ["LITELLM_MODE"] = os.environ.get("LITELLM_MODE", "PRODUCTION")
 
 VERBOSE_LLM_LOADING = False # Set to True for debugging litellm loading
@@ -228,7 +228,7 @@ class LLMClient:
 def main():
     """Basic example demonstrating the LLMClient."""
     # Configure from environment variables or defaults
-    model = os.getenv("AIDER_MODEL", "gpt-4o-mini") # Example: use AIDER_MODEL env var
+    model = os.getenv("EMIGO_MODEL", "gpt-4o-mini") # Example: use EMIGO_MODEL env var
     api_key = os.getenv("OPENAI_API_KEY")
     base_url = os.getenv("OPENAI_API_BASE") # Or OLLAMA_HOST, etc.
 

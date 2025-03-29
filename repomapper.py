@@ -20,9 +20,9 @@ This produces a concise, context-aware map suitable for LLM context windows.
 --render-cache Behavior (Debugging/Inspection):
 When the --render-cache flag is used, the script bypasses the ranking and
 token-limiting steps. It loads all tags (definitions and references) from the
-cache directory (.aider.tags.cache.v*) and renders them using the same
-snippet-generation logic (TreeContext). This often results in showing large
-portions, or even the entirety, of the cached files. This mode is useful for
+cache directory and renders them using the same snippet-generation
+logic (TreeContext). This often results in showing large portions,
+or even the entirety, of the cached files. This mode is useful for
 inspecting the raw information captured by the tagger and the output of the
 rendering engine, but its output is generally too large and unfiltered for
 direct use as LLM context.
