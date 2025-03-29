@@ -19,7 +19,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-from datetime import datetime
 from epc.server import ThreadingEPCServer
 from llm import LLMClient
 from prompt_builder import PromptBuilder
@@ -96,8 +95,6 @@ class Emigo:
             print("EMIGO ERROR: parse project path of '{}' failed".format(filename))
 
     def send_llm_message(self, project_path, prompt):
-        verbose = True
-
         if project_path in self.llm_client_dict:
             eval_in_emacs("emigo-flush-ai-buffer", project_path, "\n\n{}\n\n".format(prompt), "user")
 
