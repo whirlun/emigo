@@ -187,7 +187,7 @@ Then Emigo will start by gdb, please send new issue with `*emigo*' buffer conten
   "Call Python EPC function METHOD and ARGS asynchronously."
   (if (emigo-epc-live-p emigo-epc-process)
       (emigo-deferred-chain
-       (emigo-epc-call-deferred emigo-epc-process (read method) args))
+        (emigo-epc-call-deferred emigo-epc-process (read method) args))
     (setq emigo-first-call-method method)
     (setq emigo-first-call-args args)
     ))
@@ -280,12 +280,12 @@ Then Emigo will start by gdb, please send new issue with `*emigo*' buffer conten
   (when (and emigo-first-call-method
              emigo-first-call-args)
     (emigo-deferred-chain
-     (emigo-epc-call-deferred emigo-epc-process
-                              (read emigo-first-call-method)
-                              emigo-first-call-args)
-     (setq emigo-first-call-method nil)
-     (setq emigo-first-call-args nil)
-     )))
+      (emigo-epc-call-deferred emigo-epc-process
+                               (read emigo-first-call-method)
+                               emigo-first-call-args)
+      (setq emigo-first-call-method nil)
+      (setq emigo-first-call-args nil)
+      )))
 
 (defun emigo-enable ()
   (add-hook 'post-command-hook #'emigo-start-process))
@@ -293,11 +293,128 @@ Then Emigo will start by gdb, please send new issue with `*emigo*' buffer conten
 (defun emigo-read-file-content (filepath)
   (with-temp-buffer
     (insert-file-contents filepath)
-  (string-trim (buffer-string))))
+    (string-trim (buffer-string))))
 
 (defun emigo (prompt)
   (interactive "sEmigo: ")
   (emigo-call-async "emigo" (buffer-file-name) prompt))
+
+(defcustom emigo-dedicated-window-width 50
+  "The height of `emigo' dedicated window."
+  :type 'integer
+  :group 'emigo)
+
+(defvar emigo-dedicated-window nil
+  "The dedicated `emigo' window.")
+
+(defvar emigo-dedicated-buffer nil
+  "The dedicated `emigo' buffer.")
+
+(defun emigo-current-window-take-height (&optional window)
+  "Return the height the `window' takes up.
+Not the value of `window-width', it returns usable rows available for WINDOW.
+If `window' is nil, get current window."
+  (let ((edges (window-edges window)))
+    (- (nth 3 edges) (nth 1 edges))))
+
+(defun emigo-dedicated-exist-p ()
+  (and (emigo-buffer-exist-p emigo-dedicated-buffer)
+       (emigo-window-exist-p emigo-dedicated-window)
+       ))
+
+(defun emigo-window-exist-p (window)
+  "Return `non-nil' if WINDOW exist.
+Otherwise return nil."
+  (and window (window-live-p window)))
+
+(defun emigo-buffer-exist-p (buffer)
+  "Return `non-nil' if `BUFFER' exist.
+Otherwise return nil."
+  (and buffer (buffer-live-p buffer)))
+
+(defun emigo-dedicated-open ()
+  "Open dedicated `emigo' window."
+  (interactive)
+  (if (emigo-buffer-exist-p emigo-dedicated-buffer)
+      (if (emigo-window-exist-p emigo-dedicated-window)
+          (emigo-dedicated-select-window)
+        (emigo-dedicated-pop-window))
+    (emigo-dedicated-create-window)))
+
+(defun emigo-dedicated-close ()
+  "Close dedicated `emigo' window."
+  (interactive)
+  (if (emigo-dedicated-exist-p)
+      (let ((current-window (selected-window)))
+        ;; Remember height.
+        (emigo-dedicated-select-window)
+        (delete-window emigo-dedicated-window)
+        (if (emigo-window-exist-p current-window)
+            (select-window current-window)))
+    (message "`EMIGO DEDICATED' window is not exist.")))
+
+(defun emigo-dedicated-toggle ()
+  "Toggle dedicated `emigo' window."
+  (interactive)
+  (if (emigo-dedicated-exist-p)
+      (emigo-dedicated-close)
+    (emigo-dedicated-open)))
+
+(defun emigo-dedicated-select-window ()
+  "Select emigo dedicated window."
+  (select-window emigo-dedicated-window)
+  (set-window-dedicated-p (selected-window) t))
+
+(defun emigo-dedicated-pop-window ()
+  "Pop emigo dedicated window if it exists."
+  (setq emigo-dedicated-window (display-buffer (current-buffer) `(display-buffer-in-side-window (side . right) (window-width . ,emigo-dedicated-window-width))))
+  (select-window emigo-dedicated-window)
+  (set-window-buffer emigo-dedicated-window emigo-dedicated-buffer)
+  (set-window-dedicated-p (selected-window) t))
+
+(defun emigo-dedicated-create-window ()
+  "Create emigo dedicated window if it not existing."
+  (eshell)
+  (setq emigo-dedicated-buffer (current-buffer))
+  (previous-buffer)
+  (emigo-dedicated-pop-window))
+
+(defun emigo-dedicated-split-window ()
+  "Split dedicated window at bottom of frame."
+  ;; Select bottom window of frame.
+  (ignore-errors
+    (dotimes (i 50)
+      (windmove-right)))
+  ;; Split with dedicated window height.
+  (split-window (selected-window) (- (emigo-current-window-take-height) emigo-dedicated-window-width) t)
+  (other-window 1)
+  (setq emigo-dedicated-window (selected-window)))
+
+(defadvice delete-other-windows (around emigo-delete-other-window-advice activate)
+  "This is advice to make `emigo' avoid dedicated window deleted.
+Dedicated window can't deleted by command `delete-other-windows'."
+  (unless (eq (selected-window) emigo-dedicated-window)
+    (let ((emigo-dedicated-active-p (emigo-window-exist-p emigo-dedicated-window)))
+      (if emigo-dedicated-active-p
+          (let ((current-window (selected-window)))
+            (cl-dolist (win (window-list))
+              (when (and (window-live-p win)
+                         (not (eq current-window win))
+                         (not (window-dedicated-p win)))
+                (delete-window win))))
+        ad-do-it))))
+
+(defadvice other-window (after emigo-dedicated-other-window-advice)
+  "Default, can use `other-window' select window in cyclic ordering of windows.
+But sometimes we don't want to select `sr-speedbar' window,
+but use `other-window' and just make `emigo' dedicated
+window as a viewable sidebar.
+
+This advice can make `other-window' skip `emigo' dedicated window."
+  (let ((count (or (ad-get-arg 0) 1)))
+    (when (and (emigo-window-exist-p emigo-dedicated-window)
+               (eq emigo-dedicated-window (selected-window)))
+      (other-window count))))
 
 (provide 'emigo)
 
