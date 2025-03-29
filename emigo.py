@@ -18,20 +18,18 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
-import threading
-import traceback
-import sys
-from epc.server import ThreadingEPCServer
-from utils import *
 
+from datetime import datetime
+from epc.server import ThreadingEPCServer
+from llm import LLMClient
+from prompt_builder import PromptBuilder
+from utils import *
 import json
 import os
 import re
-# Removed subprocess import
-from datetime import datetime
-# Assuming llm.py and prompt_builder.py are in the same directory or Python path
-from llm import LLMClient
-from prompt_builder import PromptBuilder # Import the new class
+import sys
+import threading
+import traceback
 
 class Emigo:
     def __init__(self, args):
