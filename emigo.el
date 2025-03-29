@@ -82,6 +82,19 @@
   "Emigo group."
   :group 'applications)
 
+(defcustom emigo-get-project-path-by-filepath nil
+  "Default use command 'git rev-parse --show-toplevel' get project path,
+you can customize `emigo-get-project-path-by-filepath' to return project path by give file path.")
+
+(defcustom emigo-model ""
+  "Default AI model.")
+
+(defcustom emigo-base-url ""
+  "Base URL for AI model.")
+
+(defcustom emigo-api-key ""
+  "API key for AI model.")
+
 (defvar emigo-server nil
   "The Emigo Server.")
 
@@ -102,11 +115,26 @@
                (emigo-epc-define-method mngr 'get-emacs-var 'emigo--get-emacs-var-func)
                (emigo-epc-define-method mngr 'get-emacs-vars 'emigo--get-emacs-vars-func)
                (emigo-epc-define-method mngr 'get-user-emacs-directory 'emigo--user-emacs-directory)
+               (emigo-epc-define-method mngr 'get-project-path 'emigo--get-project-path-func)
                ))))
     (if emigo-server
         (setq emigo-server-port (process-contact emigo-server :service))
       (error "[Emigo] emigo-server failed to start")))
   emigo-server)
+
+(defun emigo--get-project-path-func (filename)
+  "Get project root path, search order:
+
+1. Follow the rule of `emigo-get-project-path-by-filepath'
+2. Search up `.dir-locals.el'
+3. Search up `.git'"
+  (if emigo-get-project-path-by-filepath
+      ;; Fetch project root path by `emigo-get-project-path-by-filepath' if it set by user.
+      (funcall emigo-get-project-path-by-filepath filename)
+    ;; Otherwise try to search up `.dir-locals.el' file
+    (let* ((result (dir-locals-find-file filename))
+           (dir (if (consp result) (car result) result)))
+      (when dir (directory-file-name dir)))))
 
 (defun emigo--eval-in-emacs-func (sexp-string)
   (eval (read sexp-string))
@@ -159,7 +187,7 @@ Then Emigo will start by gdb, please send new issue with `*emigo*' buffer conten
   "Call Python EPC function METHOD and ARGS asynchronously."
   (if (emigo-epc-live-p emigo-epc-process)
       (emigo-deferred-chain
-        (emigo-epc-call-deferred emigo-epc-process (read method) args))
+       (emigo-epc-call-deferred emigo-epc-process (read method) args))
     (setq emigo-first-call-method method)
     (setq emigo-first-call-args args)
     ))
@@ -252,17 +280,21 @@ Then Emigo will start by gdb, please send new issue with `*emigo*' buffer conten
   (when (and emigo-first-call-method
              emigo-first-call-args)
     (emigo-deferred-chain
-      (emigo-epc-call-deferred emigo-epc-process
-                               (read emigo-first-call-method)
-                               emigo-first-call-args)
-      (setq emigo-first-call-method nil)
-      (setq emigo-first-call-args nil)
-      ))
+     (emigo-epc-call-deferred emigo-epc-process
+                              (read emigo-first-call-method)
+                              emigo-first-call-args)
+     (setq emigo-first-call-method nil)
+     (setq emigo-first-call-args nil)
+     ))
 
   (message "*******"))
 
 (defun emigo-enable ()
   (add-hook 'post-command-hook #'emigo-start-process))
+
+(defun emigo (prompt)
+  (interactive "sEmigo: ")
+  (emigo-call-async "emigo" (buffer-file-name) prompt))
 
 (provide 'emigo)
 
