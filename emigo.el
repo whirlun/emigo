@@ -285,12 +285,15 @@ Then Emigo will start by gdb, please send new issue with `*emigo*' buffer conten
                               emigo-first-call-args)
      (setq emigo-first-call-method nil)
      (setq emigo-first-call-args nil)
-     ))
-
-  (message "*******"))
+     )))
 
 (defun emigo-enable ()
   (add-hook 'post-command-hook #'emigo-start-process))
+
+(defun emigo-read-file-content (filepath)
+  (with-temp-buffer
+    (insert-file-contents filepath)
+  (string-trim (buffer-string))))
 
 (defun emigo (prompt)
   (interactive "sEmigo: ")
