@@ -152,6 +152,8 @@ you can customize `emigo-get-project-path-by-filepath' to return project path by
 (defun emigo--get-emacs-vars-func (&rest vars)
   (mapcar #'emigo--get-emacs-var-func vars))
 
+(defvar emigo-project-buffers nil)
+
 (defvar emigo-epc-process nil)
 
 (defvar emigo-internal-process nil)
@@ -205,7 +207,6 @@ Then Emigo will start by gdb, please send new issue with `*emigo*' buffer conten
 (defun emigo-restart-process ()
   "Stop and restart Emigo process."
   (interactive)
-  (emigo-dedicated-close)
   (emigo-kill-process)
   (emigo-start-process)
   (message "[Emigo] Process restarted."))
@@ -244,12 +245,22 @@ Then Emigo will start by gdb, please send new issue with `*emigo*' buffer conten
 (defun emigo-kill-process ()
   "Stop Emigo process and kill all Emigo buffers."
   (interactive)
+  ;; Kill project buffers.
+  (save-excursion
+    (cl-dolist (buffer emigo-project-buffers)
+      (when (and buffer (buffer-live-p buffer))
+        (kill-buffer buffer))))
+  (setq emigo-project-buffers nil)
+
+  ;; Close dedicated window.
+  (emigo-dedicated-close)
 
   ;; Run stop process hooks.
   (run-hooks 'emigo-stop-process-hook)
 
   ;; Kill process after kill buffer, make application can save session data.
-  (emigo--kill-python-process))
+  (emigo--kill-python-process)
+  )
 
 (add-hook 'kill-emacs-hook #'emigo-kill-process)
 
@@ -372,7 +383,9 @@ Otherwise return nil."
   (set-window-dedicated-p (selected-window) t))
 
 (defun emigo-get-ai-buffer (project-path)
-  (get-buffer-create (format " *emigo %s*" project-path)))
+  (let ((buffer (get-buffer-create (format " *emigo %s*" project-path))))
+    (add-to-list 'emigo-project-buffers buffer)
+    buffer))
 
 (defun emigo-create-ai-window (project-path)
   (save-excursion

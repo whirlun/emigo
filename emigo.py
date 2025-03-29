@@ -40,6 +40,7 @@ class Emigo:
 
         # Init vars.
         self.llm_client_dict = {}
+        self.thread_queue = []
 
         # Build EPC server.
         self.server = ThreadingEPCServer(('127.0.0.1', 0), log_traceback=True)
@@ -88,7 +89,9 @@ class Emigo:
             if project_path in self.llm_client_dict:
                 print("****** ", project_path, prompt)
             else:
-                self.start_llm_client(project_path, prompt)
+                thread = threading.Thread(target=lambda: self.start_llm_client(project_path, prompt))
+                thread.start()
+                self.thread_queue.append(thread)
         else:
             print("EMIGO ERROR: parse project path of '{}' failed".format(filename))
 
