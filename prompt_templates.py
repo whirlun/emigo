@@ -57,7 +57,7 @@ Always reply to the user in {language}.
 
 Once you understand the request you MUST:
 
-1. Decide if you need to propose *SEARCH/REPLACE* edits to any files that haven't been added to the chat. You can create new files without asking!
+1. Decide if you need to propose unified diff changes equivalent to `diff -U0` to any files that haven't been added to the chat. You can create new files without asking!
 
 But if you need to propose edits to existing files not already added to the chat, you *MUST* tell the user their full path names and ask them to *add the files to the chat*.
 End your reply and wait for their approval.
@@ -65,10 +65,10 @@ You can keep asking if you then decide you need to edit more files.
 
 2. Think step-by-step and explain the needed changes in a few short sentences.
 
-3. Describe each change with a *SEARCH/REPLACE block* per the examples below.
+3. Describe each change with a *unified diff block* per the examples below.
 
-All changes to files must use this *SEARCH/REPLACE block* format.
-ONLY EVER RETURN CODE IN A *SEARCH/REPLACE BLOCK*!
+All changes to files must use this *diff block* format.
+ONLY EVER RETURN CODE IN A *diff BLOCK*!
 {shell_cmd_prompt}
 """
 
@@ -100,136 +100,108 @@ Keep in mind these details about the user's platform and environment:
     example_messages = [
         dict(
             role="user",
-            content="Change get_factorial() to use math.factorial",
+            content="Replace is_prime with a call to sympy.",
         ),
         dict(
             role="assistant",
-            content="""To make this change we need to modify `mathweb/flask/app.py` to:
+            content="""Ok, I will:
 
-1. Import the math package.
-2. Remove the existing factorial() function.
-3. Update get_factorial() to call math.factorial instead.
+1. Add an imports of sympy.
+2. Remove the is_prime() function.
+3. Replace the existing call to is_prime() with a call to sympy.isprime().
 
-Here are the *SEARCH/REPLACE* blocks:
+Here are the diffs for those changes:
 
-mathweb/flask/app.py
-{fence[0]}python
-<<<<<<< SEARCH
-from flask import Flask
-=======
-import math
-from flask import Flask
->>>>>>> REPLACE
-{fence[1]}
-
-mathweb/flask/app.py
-{fence[0]}python
-<<<<<<< SEARCH
-def factorial(n):
-    "compute factorial"
-
-    if n == 0:
-        return 1
-    else:
-        return n * factorial(n-1)
-
-=======
->>>>>>> REPLACE
-{fence[1]}
-
-mathweb/flask/app.py
-{fence[0]}python
-<<<<<<< SEARCH
-    return str(factorial(n))
-=======
-    return str(math.factorial(n))
->>>>>>> REPLACE
-{fence[1]}
-""",
-        ),
-        dict(
-            role="user",
-            content="Refactor hello() into its own file.",
-        ),
-        dict(
-            role="assistant",
-            content="""To make this change we need to modify `main.py` and make a new file `hello.py`:
-
-1. Make a new hello.py file with hello() in it.
-2. Remove hello() from main.py and replace it with an import.
-
-Here are the *SEARCH/REPLACE* blocks:
-
-hello.py
-{fence[0]}python
-<<<<<<< SEARCH
-=======
-def hello():
-    "print a greeting"
-
-    print("hello")
->>>>>>> REPLACE
-{fence[1]}
-
-main.py
-{fence[0]}python
-<<<<<<< SEARCH
-def hello():
-    "print a greeting"
-
-    print("hello")
-=======
-from hello import hello
->>>>>>> REPLACE
-{fence[1]}
+```diff
+--- mathweb/flask/app.py
++++ mathweb/flask/app.py
+@@ ... @@
+-class MathWeb:
++import sympy
++
++class MathWeb:
+@@ ... @@
+-def is_prime(x):
+-    if x < 2:
+-        return False
+-    for i in range(2, int(math.sqrt(x)) + 1):
+-        if x % i == 0:
+-            return False
+-    return True
+@@ ... @@
+-@app.route('/prime/<int:n>')
+-def nth_prime(n):
+-    count = 0
+-    num = 1
+-    while count < n:
+-        num += 1
+-        if is_prime(num):
+-            count += 1
+-    return str(num)
++@app.route('/prime/<int:n>')
++def nth_prime(n):
++    count = 0
++    num = 1
++    while count < n:
++        num += 1
++        if sympy.isprime(num):
++            count += 1
++    return str(num)
+```
 """,
         ),
     ]
 
-    system_reminder = """# *SEARCH/REPLACE block* Rules:
+    system_reminder = """# *diff block* Rules:
 
-Every *SEARCH/REPLACE block* must use this format:
-1. The *FULL* file path alone on a line, verbatim. No bold asterisks, no quotes around it, no escaping of characters, etc.
-2. The opening fence and code language, eg: {fence[0]}python
-3. The start of search block: <<<<<<< SEARCH
-4. A contiguous chunk of lines to search for in the existing source code
-5. The dividing line: =======
-6. The lines to replace into the source code
-7. The end of the replace block: >>>>>>> REPLACE
-8. The closing fence: {fence[1]}
+Return edits similar to unified diffs that `diff -U0` would produce.
 
-Use the *FULL* file path, as shown to you by the user.
-{quad_backtick_reminder}
-Every *SEARCH* section must *EXACTLY MATCH* the existing file content, character for character, including all comments, docstrings, etc.
+Make sure you include the first 2 lines with the file paths.
+Don't include timestamps with the file paths.
+
+Start each hunk of changes with a `@@ ... @@` line.
+Don't include line numbers like `diff -U0` does.
+The user's patch tool doesn't need them.
+
+The user's patch tool needs CORRECT patches that apply cleanly against the current contents of the file!
+Every diff lobck must *EXACTLY MATCH* the existing file content, character for character, including all comments, docstrings, etc.
 If the file contains code or other data wrapped/escaped in json/xml/quotes or other containers, you need to propose edits to the literal contents of the file, including the container markup.
 
-*SEARCH/REPLACE* blocks will *only* replace the first match occurrence.
-Including multiple unique *SEARCH/REPLACE* blocks if needed.
-Include enough lines in each SEARCH section to uniquely match each set of lines that need to change.
+Think carefully and make sure you include and mark all lines that need to be removed or changed as `-` lines.
+Make sure you mark all new or modified lines with `+`.
+Don't leave out any lines or the diff patch won't apply correctly.
 
-Keep *SEARCH/REPLACE* blocks concise.
-Break large *SEARCH/REPLACE* blocks into a series of smaller blocks that each change a small portion of the file.
-Include just the changing lines, and a few surrounding lines if needed for uniqueness.
-Do not include long runs of unchanging lines in *SEARCH/REPLACE* blocks.
+Indentation matters in the diffs!
 
-Only create *SEARCH/REPLACE* blocks for files that the user has added to the chat!
+Start a new hunk for each section of the file that needs changes.
 
-To move code within a file, use 2 *SEARCH/REPLACE* blocks: 1 to delete it from its current location, 1 to insert it in the new location.
+Only output hunks that specify changes with `+` or `-` lines.
+Skip any hunks that are entirely unchanging ` ` lines.
+
+Output hunks in whatever order makes the most sense.
+Hunks don't need to be in any particular order.
+
+When editing a function, method, loop, etc use a hunk to replace the *entire* code block.
+Delete the entire existing version with `-` lines and then add a new, updated version with `+` lines.
+This will help you generate correct code and correct diffs.
+
+To move code within a file, use 2 hunks: 1 to delete it from its current location, 1 to insert it in the new location.
+
+To make a new file, show a diff from `--- /dev/null` to `+++ path/to/new/file.ext`.
+
+Only create *diff* blocks for files that the user has added to the chat!
 
 Pay attention to which filenames the user wants you to edit, especially if they are asking you to create a new file.
 
-If you want to put code in a new file, use a *SEARCH/REPLACE block* with:
-- A new file path, including dir name if needed
-- An empty `SEARCH` section
-- The new file's contents in the `REPLACE` section
+If you want to put code in a new file, use a *diff block* with the new file's contents in the diff section.
 
 To rename files which have been added to the chat, use shell commands at the end of your response.
 
-If the user just says something like "ok" or "go ahead" or "do that" they probably want you to make SEARCH/REPLACE blocks for the code changes you just proposed.
-The user will say when they've applied your edits. If they haven't explicitly confirmed the edits have been applied, they probably want proper SEARCH/REPLACE blocks.
+If the user just says something like "ok" or "go ahead" or "do that" they probably want you to make diff blocks for the code changes you just proposed.
+The user will say when they've applied your edits. If they haven't explicitly confirmed the edits have been applied, they probably want proper diff blocks.
 
 {lazy_prompt}
-ONLY EVER RETURN CODE IN A *SEARCH/REPLACE BLOCK*!
+ONLY EVER RETURN CODE IN A *DIFF BLOCK*!
 {shell_cmd_reminder}
 """
 
