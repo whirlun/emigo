@@ -405,12 +405,14 @@ Otherwise return nil."
       (set-window-buffer emigo-dedicated-window emigo-dedicated-buffer)
       (set-window-dedicated-p (selected-window) t))))
 
-(defun emigo-flush-ai-buffer (project-path content)
+(defun emigo-flush-ai-buffer (project-path content role)
   (save-excursion
     (let ((ai-buffer (emigo-get-ai-buffer project-path)))
       (with-current-buffer ai-buffer
         (goto-char (point-max))
-        (insert content)))))
+        (if (equal role "user")
+            (insert (propertize content 'face font-lock-keyword-face))
+          (insert content))))))
 
 (defun emigo-dedicated-split-window ()
   "Split dedicated window at bottom of frame."
