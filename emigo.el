@@ -313,7 +313,9 @@ Then Emigo will start by gdb, please send new issue with `*emigo*' buffer conten
 
 (defun emigo (prompt)
   (interactive "sEmigo: ")
-  (emigo-call-async "emigo" (buffer-file-name) prompt))
+  (if (boundp 'emigo--project-path)
+      (emigo-call-async "emigo_project" emigo--project-path prompt)
+    (emigo-call-async "emigo" (buffer-file-name) prompt)))
 
 (defcustom emigo-dedicated-window-width 50
   "The height of `emigo' dedicated window."
@@ -389,6 +391,8 @@ Otherwise return nil."
 (defun emigo-get-ai-buffer (project-path)
   (let ((buffer (get-buffer-create (format " *emigo %s*" project-path))))
     (add-to-list 'emigo-project-buffers buffer)
+    (with-current-buffer buffer
+      (setq-local emigo--project-path project-path))
     buffer))
 
 (defun emigo-create-ai-window (project-path)

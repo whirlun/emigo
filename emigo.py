@@ -81,18 +81,21 @@ class Emigo:
     def emigo(self, filename, prompt):
         project_path = get_project_path(filename)
         if isinstance(project_path, str):
-            eval_in_emacs("emigo-create-ai-window", project_path)
-
-            if project_path in self.llm_client_dict:
-                thread = threading.Thread(target=lambda: self.send_llm_message(project_path, prompt))
-                thread.start()
-                self.thread_queue.append(thread)
-            else:
-                thread = threading.Thread(target=lambda: self.start_llm_client(project_path, prompt))
-                thread.start()
-                self.thread_queue.append(thread)
+            self.emigo_project(project_path, prompt)
         else:
             print("EMIGO ERROR: parse project path of '{}' failed".format(filename))
+
+    def emigo_project(self, project_path, prompt):
+        eval_in_emacs("emigo-create-ai-window", project_path)
+
+        if project_path in self.llm_client_dict:
+            thread = threading.Thread(target=lambda: self.send_llm_message(project_path, prompt))
+            thread.start()
+            self.thread_queue.append(thread)
+        else:
+            thread = threading.Thread(target=lambda: self.start_llm_client(project_path, prompt))
+            thread.start()
+            self.thread_queue.append(thread)
 
     def send_llm_message(self, project_path, prompt):
         if project_path in self.llm_client_dict:
