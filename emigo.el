@@ -95,6 +95,10 @@ you can customize `emigo-get-project-path-by-filepath' to return project path by
 (defcustom emigo-api-key ""
   "API key for AI model.")
 
+(defcustom emigo-config-location (expand-file-name (locate-user-emacs-file "emigo/"))
+  "Directory where emigo will store configuration files."
+  :type 'directory)
+
 (defvar emigo-server nil
   "The Emigo Server.")
 

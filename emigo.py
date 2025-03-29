@@ -95,9 +95,16 @@ class Emigo:
         else:
             print("EMIGO ERROR: parse project path of '{}' failed".format(filename))
 
+    def get_history_file_path(self, project_path):
+        history_dir = os.path.join(os.path.expanduser(get_emacs_var("emigo-config-location")), "history")
+        history_file_path = os.path.join(history_dir, project_path.replace(os.path.sep, "_"))
+        touch(history_file_path)
+
+        return history_file_path
+
     def send_llm_message(self, project_path, prompt):
         verbose = True
-        history_file = ".emigo_history.md"
+        history_file = self.get_history_file_path(project_path)
 
         if project_path in self.llm_client_dict:
             eval_in_emacs("emigo-flush-ai-buffer", project_path, "\n\n{}\n\n".format(prompt))
@@ -138,7 +145,7 @@ class Emigo:
         chat_files = []
         read_only_files = []
         tokenizer = "cl100k_base"
-        history_file = ".emigo_history.md"
+        history_file = self.get_history_file_path(project_path)
 
         # --- Pre-process: Find and add @-mentioned files ---
         mentioned_in_prompt = set()

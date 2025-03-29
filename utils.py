@@ -253,3 +253,14 @@ def get_os_name():
 def parse_json_content(content):
     return json_parser.loads(content)
 
+def touch(path):
+    import os
+
+    if not os.path.exists(path):
+        basedir = os.path.dirname(path)
+
+        if not os.path.exists(basedir):
+            os.makedirs(basedir)
+
+        with open(path, 'a'):
+            os.utime(path)
