@@ -402,9 +402,11 @@ Otherwise return nil."
       (set-window-dedicated-p (selected-window) t))))
 
 (defun emigo-flush-ai-buffer (project-path content)
-  (let ((ai-buffer (emigo-get-ai-buffer project-path)))
-    (with-current-buffer ai-buffer
-      (insert content))))
+  (save-excursion
+    (let ((ai-buffer (emigo-get-ai-buffer project-path)))
+      (with-current-buffer ai-buffer
+        (goto-char (point-max))
+        (insert content)))))
 
 (defun emigo-dedicated-split-window ()
   "Split dedicated window at bottom of frame."
