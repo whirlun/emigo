@@ -205,6 +205,7 @@ Then Emigo will start by gdb, please send new issue with `*emigo*' buffer conten
 (defun emigo-restart-process ()
   "Stop and restart Emigo process."
   (interactive)
+  (emigo-dedicated-close)
   (emigo-kill-process)
   (emigo-start-process)
   (message "[Emigo] Process restarted."))
@@ -332,15 +333,6 @@ Otherwise return nil."
 Otherwise return nil."
   (and buffer (buffer-live-p buffer)))
 
-(defun emigo-dedicated-open ()
-  "Open dedicated `emigo' window."
-  (interactive)
-  (if (emigo-buffer-exist-p emigo-dedicated-buffer)
-      (if (emigo-window-exist-p emigo-dedicated-window)
-          (emigo-dedicated-select-window)
-        (emigo-dedicated-pop-window))
-    (emigo-dedicated-create-window)))
-
 (defun emigo-dedicated-close ()
   "Close dedicated `emigo' window."
   (interactive)
@@ -360,10 +352,12 @@ Otherwise return nil."
       (emigo-dedicated-close)
     (emigo-dedicated-open)))
 
-(defun emigo-dedicated-select-window ()
-  "Select emigo dedicated window."
-  (select-window emigo-dedicated-window)
-  (set-window-dedicated-p (selected-window) t))
+(defun emigo-dedicated-open ()
+  "Open dedicated `emigo' window."
+  (interactive)
+  (if (emigo-window-exist-p emigo-dedicated-window)
+      (emigo-dedicated-select-window)
+    (emigo-dedicated-pop-window)))
 
 (defun emigo-dedicated-pop-window ()
   "Pop emigo dedicated window if it exists."
@@ -372,12 +366,32 @@ Otherwise return nil."
   (set-window-buffer emigo-dedicated-window emigo-dedicated-buffer)
   (set-window-dedicated-p (selected-window) t))
 
-(defun emigo-dedicated-create-window ()
-  "Create emigo dedicated window if it not existing."
-  (eshell)
-  (setq emigo-dedicated-buffer (current-buffer))
-  (previous-buffer)
-  (emigo-dedicated-pop-window))
+(defun emigo-dedicated-select-window ()
+  "Select emigo dedicated window."
+  (select-window emigo-dedicated-window)
+  (set-window-dedicated-p (selected-window) t))
+
+(defun emigo-get-ai-buffer (project-path)
+  (get-buffer-create (format " *emigo %s*" project-path)))
+
+(defun emigo-create-ai-window (project-path)
+  (save-excursion
+    (let ((ai-buffer (emigo-get-ai-buffer project-path)))
+      (setq emigo-dedicated-buffer ai-buffer)
+      (unless (emigo-window-exist-p emigo-dedicated-window)
+        (setq emigo-dedicated-window
+              (display-buffer (current-buffer)
+                              `(display-buffer-in-side-window
+                                (side . right)
+                                (window-width . ,emigo-dedicated-window-width)))))
+      (select-window emigo-dedicated-window)
+      (set-window-buffer emigo-dedicated-window emigo-dedicated-buffer)
+      (set-window-dedicated-p (selected-window) t))))
+
+(defun emigo-flush-ai-buffer (project-path content)
+  (let ((ai-buffer (emigo-get-ai-buffer project-path)))
+    (with-current-buffer ai-buffer
+      (insert content))))
 
 (defun emigo-dedicated-split-window ()
   "Split dedicated window at bottom of frame."
