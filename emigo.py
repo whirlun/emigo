@@ -95,16 +95,8 @@ class Emigo:
         else:
             print("EMIGO ERROR: parse project path of '{}' failed".format(filename))
 
-    def get_history_file_path(self, project_path):
-        history_dir = os.path.join(os.path.expanduser(get_emacs_var("emigo-config-location")), "history")
-        history_file_path = os.path.join(history_dir, project_path.replace(os.path.sep, "_"))
-        touch(history_file_path)
-
-        return history_file_path
-
     def send_llm_message(self, project_path, prompt):
         verbose = True
-        history_file = self.get_history_file_path(project_path)
 
         if project_path in self.llm_client_dict:
             eval_in_emacs("emigo-flush-ai-buffer", project_path, "\n\n{}\n\n".format(prompt), "user")
@@ -127,13 +119,6 @@ class Emigo:
                 # Decide if you want to exit or just log the error
                 # For now, we'll log and continue to history writing if possible
                 full_response = f"[Error during LLM communication: {e}]"
-
-
-            # --- 3. Log History ---
-            if history_file:
-                self.append_to_history(history_file, prompt, full_response)
-                if verbose:
-                    print(f"\nInteraction logged to {history_file}", file=sys.stderr)
         else:
             print("EMIGO ERROR: cannot found project path {} in llm dict.".format(project_path))
 
@@ -145,7 +130,6 @@ class Emigo:
         chat_files = []
         read_only_files = []
         tokenizer = "cl100k_base"
-        history_file = self.get_history_file_path(project_path)
 
         # --- Pre-process: Find and add @-mentioned files ---
         mentioned_in_prompt = set()
@@ -188,8 +172,6 @@ class Emigo:
                 tokenizer=tokenizer,
                 verbose=verbose,
                 no_shell=no_shell,
-                history_file=history_file, # Pass history file path
-                # Assuming default fences '```' are okay, add args if needed
             )
             messages = builder.build_prompt_messages()
 
@@ -277,30 +259,9 @@ class Emigo:
             # For now, we'll log and continue to history writing if possible
             full_response = f"[Error during LLM communication: {e}]"
 
-
-        # --- 3. Log History ---
-        if history_file:
-            self.append_to_history(history_file, prompt, full_response)
-            if verbose:
-                print(f"\nInteraction logged to {history_file}", file=sys.stderr)
-
     def cleanup(self):
         """Do some cleanup before exit python process."""
         close_epc_client()
-
-    def append_to_history(self, history_file: str, user_prompt: str, assistant_response: str):
-        """Appends the user prompt and assistant response to the history file."""
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        try:
-            with open(history_file, "a", encoding="utf-8") as f:
-                f.write(f"#### User @ {timestamp}\n")
-                f.write(f"{user_prompt.strip()}\n\n")
-                f.write(f"#### Assistant @ {timestamp}\n")
-                f.write(f"{assistant_response.strip()}\n\n")
-        except IOError as e:
-            print(f"Warning: Could not write to history file {history_file}: {e}", file=sys.stderr)
-        except Exception as e:
-            print(f"Warning: An unexpected error occurred writing to history file: {e}", file=sys.stderr)
 
 if __name__ == "__main__":
     if len(sys.argv) >= 3:
