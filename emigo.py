@@ -179,6 +179,29 @@ class Emigo:
     def _execute_llm_interaction_loop(self, project_path, client, initial_user_prompt=None):
         """
         Handles the core interaction loop with the LLM, including automatic file adding.
+
+        This method implements a key innovation that allows the LLM to request additional
+        files during a single user interaction. The flow is:
+
+        1. User sends initial prompt (may include some @mentioned files)
+        2. LLM receives prompt with current context (repo map + mentioned files)
+        3. LLM may respond with:
+           - A final answer (loop ends)
+           - A request for more files in format:
+             "Action: add_files_to_context\nFiles:\nfile1\nfile2"
+        4. If files are requested:
+           - System validates and adds files to context
+           - Loop repeats with same user prompt but expanded context
+           - Max retries (3) prevents infinite loops
+
+        This solves the "context gap" problem where LLM needs more files than initially
+        provided to properly answer, without requiring manual user intervention between
+        the request and final response.
+
+        Args:
+            project_path: Root directory of current project
+            client: LLMClient instance for this project
+            initial_user_prompt: The original user message that started this interaction
         """
         verbose = True # Or get from config/client
         no_shell = True # Or get from config/client

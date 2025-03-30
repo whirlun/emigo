@@ -26,15 +26,16 @@ Any other messages in the chat may contain outdated versions of the files' conte
 
     files_no_full_files = "I am not sharing any files that you can edit yet."
 
-    files_no_full_files_with_repo_map = """Don't try and edit any existing code without asking me to add the files to the chat!
-Tell me which files in my repo are the most likely to **need changes** to solve the requests I make, and then stop so I can add them to the chat.
-Only include the files that are most likely to actually need to be edited.
-Don't include files that might contain relevant context, just files that will need to be changed.
+    files_no_full_files_with_repo_map = """Don't try and edit any existing code without asking me to add the files to the chat first!
+Based on my request and the file summaries, identify the files most likely to **need changes**.
+Respond by requesting these files using the `Action: add_files_to_context` format.
+Only include files that are likely to *need edits*. Do not include files just for context.
+Then stop and wait for me to add the files.
 """  # noqa: E501
 
     files_no_full_files_with_repo_map_reply = (
-        "Ok, based on your requests I will suggest which files need to be edited and then"
-        " stop and wait for your approval."
+        "Ok, I will analyze the request and repo map, then request the files that likely need"
+        " changes using the specified action format and wait for you to add them."
     )
 
     repo_content_prefix = """Here are summaries of some files present in my project.
@@ -57,15 +58,15 @@ Always reply to the user in {language}.
 
 Once you understand the request you MUST follow these steps:
 
-1.  Analyze File Needs: You may only have the file summaries, if you determined that you need to edit a file, you need to request for the entirely of its content to be added to the context. You *MUST* respond *only* with:
+1. Analyze File Needs: If you determine you need to see the full content of existing files not yet added to the chat before proceeding, you *MUST* respond *only* with the following structure, and nothing else:
 ```text
 Action: add_files_to_context
 Files:
 <list of full file paths, one per line>
 ```
-Do *not* provide any other explanation or diffs in this response. Stop after listing the files.
+Do *not* provide any other explanation or diffs in this response. Stop and wait for the user to provide the files.
 
-2. If you already have the full file content, think step-by-step and explain the needed changes in a few short sentences.
+2. If you have the necessary file content (or are creating new files), think step-by-step and explain the needed changes in a few short sentences.
 
 3. Describe each change with a *unified diff block*. You can propose edits to files already in the chat context or create new files.
 
@@ -168,9 +169,9 @@ Skip any hunks that are entirely unchanging ` ` lines.
 Output hunks in whatever order makes the most sense.
 Hunks don't need to be in any particular order.
 
-When editing a function, method, loop, etc use a hunk to replace the *entire* code block.
-Delete the entire existing version with `-` lines and then add a new, updated version with `+` lines.
-This will help you generate correct code and correct diffs.
+When editing a function, method, loop, etc., use a hunk to replace the *entire* code block.
+Delete the entire existing version with `-` lines and then add the new, updated version with `+` lines.
+This practice helps ensure correctness for both the code and the diff.
 
 To move code within a file, use 2 hunks: 1 to delete it from its current location, 1 to insert it in the new location.
 
