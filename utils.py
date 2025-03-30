@@ -89,7 +89,7 @@ def epc_arg_transformer(arg):
     (list 1 2 3)               => [1 2 3]
     (list 1 2 (list 3 4))      => [1 2 [3 4]]
     """
-    if type(arg) != list:
+    if not isinstance(arg, list):
         return arg
 
     # NOTE: Empty list elisp can be treated as both empty python dict/list
@@ -99,7 +99,7 @@ def epc_arg_transformer(arg):
     type_dict_p = len(arg) % 2 == 0
     if type_dict_p:
         for v in arg[::2]:
-            if type(v) != sexpdata.Symbol or not v.value().startswith(":"):
+            if (not isinstance(v, sexpdata.Symbol)) or not v.value().startswith(":"):
                 type_dict_p = False
                 break
 
