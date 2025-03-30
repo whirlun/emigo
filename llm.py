@@ -60,9 +60,9 @@ class LazyLiteLLM:
             ):
                 self._lazy_module._logging._disable_debugging()
 
-        except ImportError:
+        except ImportError as e:
             print(
-                "Error: litellm not found. Please install it: pip install litellm",
+                f"Error: {e} litellm not found. Please install it: pip install litellm",
                 file=sys.stderr,
             )
             sys.exit(1)
