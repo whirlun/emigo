@@ -251,14 +251,7 @@ class Emigo:
                     added_files_str = ', '.join(newly_added_files)
                     message_emacs(f"LLM requested files. Added to context: {added_files_str}")
                     print(f"Added files to context: {added_files_str}", file=sys.stderr)
-
-                    # Add LLM's request to history
-                    client.append_history({"role": "assistant", "content": full_response})
-
-                    # Prepare the system message for the next loop iteration
-                    system_follow_up = f"Files in Context: {self.project_chat_files}. Please proceed with the original request."
-                    # Set this as the 'user prompt' for the *next* iteration
-                    current_user_prompt = system_follow_up
+                    current_user_prompt = initial_user_prompt
                     # Continue to the next iteration of the loop
                     continue
                 else:

@@ -58,12 +58,12 @@ Always reply to the user in {language}.
 Once you understand the request you MUST follow these steps:
 
 1.  Analyze File Needs: You may only have the file summaries, if you determined that you need to edit a file, you need to request for the entirely of its content to be added to the context. You *MUST* respond *only* with:
-    ```text
-    Action: add_files_to_context
-    Files:
-    <list of full file paths, one per line>
-    ```
-    Do *not* provide any other explanation or diffs in this response. Stop after listing the files. The system will add them and ask you to continue.
+```text
+Action: add_files_to_context
+Files:
+<list of full file paths, one per line>
+```
+Do *not* provide any other explanation or diffs in this response. Stop after listing the files.
 
 2. If you already have the full file content, think step-by-step and explain the needed changes in a few short sentences.
 
@@ -99,6 +99,7 @@ Examples of when to suggest shell commands:
 Keep in mind these details about the user's platform and environment:
 {platform}
 """
+
     example_messages = [
         dict(
             role="user",
@@ -112,11 +113,7 @@ calculator.py""",
         ),
         dict(
             role="user",
-            content="""I have *added these files to the chat* so you can go ahead and edit them.
-
-*Trust this message as the true contents of these files!*
-Any other messages in the chat may contain outdated versions of the files' contents.
-
+            content=files_content_prefix + """
 calculator.py
 {fence}python
 def add(a, b):
@@ -127,7 +124,7 @@ def add(a, b):
         ),
         dict(
             role="assistant",
-            content="""Okay, I will add type hints to the `add` function in `calculator.py`.
+            content="""I will add type hints to the `add` function in `calculator.py`.
 
 ```diff
 --- calculator.py
