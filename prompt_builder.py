@@ -52,8 +52,6 @@ from prompt_templates import RepoPrompts
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 
-# Import the history parser function
-from history_parser import parse_history_markdown
 from prompt_templates import RepoPrompts
 from repomapper import RepoMapper
 
@@ -310,9 +308,10 @@ def get_readonly_files_messages(content: str, prompts: RepoPrompts) -> List[Dict
     ]
 
 
-def get_chat_files_messages(content: str, prompts: RepoPrompts, has_repo_map: bool = False) -> List[Dict]:
+def get_chat_files_messages(content: str, prompts: RepoPrompts, chat_files: List[str], has_repo_map: bool = False) -> List[Dict]:
     """Generate chat files messages using RepoPrompts."""
     if not content:
+        # If no files are being added, use the standard replies
         if has_repo_map and prompts.files_no_full_files_with_repo_map:
             return [
                 dict(role="user", content=prompts.files_no_full_files_with_repo_map),
@@ -320,13 +319,19 @@ def get_chat_files_messages(content: str, prompts: RepoPrompts, has_repo_map: bo
             ]
         return [
             dict(role="user", content=prompts.files_no_full_files),
-            dict(role="assistant", content="Ok.") # Use the standard reply
+            dict(role="assistant", content="Ok.") # Use the standard reply for no files
         ]
 
-    # Use prefixes/replies directly from the prompts object
+    # Format the assistant reply with the list of files being added
+    files_list_str = ", ".join(chat_files) if chat_files else "the provided files"
+    assistant_reply = prompts.files_content_assistant_reply
+    # Append the file list if files exist
+    if chat_files:
+        assistant_reply += f" Specifically: {files_list_str}"
+
     return [
         dict(role="user", content=prompts.files_content_prefix + content),
-        dict(role="assistant", content=prompts.files_content_assistant_reply)
+        dict(role="assistant", content=assistant_reply)
     ]
 
 
@@ -380,7 +385,6 @@ class PromptBuilder:
         no_shell: bool = False,
         fence_open: str = "```",
         fence_close: str = "```",
-        history_file: Optional[str] = None, # Add history file path
     ):
         self.root_dir = os.path.abspath(root_dir)
         self.map_tokens = map_tokens
@@ -388,12 +392,12 @@ class PromptBuilder:
         self.chat_files = chat_files or []
         self.read_only_files = read_only_files or []
         self.user_message = user_message
+        # extra_mentioned_files/idents are now primarily for map context, not adding to chat_files here
         self.extra_mentioned_files = extra_mentioned_files or []
         self.extra_mentioned_idents = extra_mentioned_idents or []
         self.verbose = verbose
         self.no_shell = no_shell
         self.fence = (fence_open, fence_close)
-        self.history_file = history_file # Store history file path
 
         # Initialize RepoPrompts from the external file
         self.prompts = RepoPrompts()
@@ -405,11 +409,18 @@ class PromptBuilder:
             root_dir=self.root_dir,
             map_tokens=self.map_tokens,
             tokenizer=self.tokenizer,
-            verbose=self.verbose
+            verbose=self.verbose,
+            # force_refresh=self.force_refresh # If you add force_refresh option
         )
 
-    def build_prompt_messages(self) -> List[Dict]:
-        """Constructs the final list of messages for the LLM."""
+    def build_prompt_messages(self, current_history: Optional[List[Dict]] = None) -> List[Dict]:
+        """
+        Constructs the final list of messages for the LLM.
+
+        Args:
+            current_history: Optional list of current chat history messages.
+                             If None, history is loaded from self.history_file.
+        """
         chunks = ChatChunks()
 
         # --- System Prompt ---
@@ -431,31 +442,40 @@ class PromptBuilder:
                 "content": example_content
             })
 
-        # --- Load History (Compromise: Read from file) ---
-        # NOTE: Reads the entire history file, no summarization. May exceed token limits.
-        chunks.history = parse_history_markdown(self.history_file)
-        if self.verbose and chunks.history:
-            print(f"Loaded {len(chunks.history)} messages from history file: {self.history_file}", file=sys.stderr)
-        elif self.verbose:
-            print(f"No history loaded from: {self.history_file}", file=sys.stderr)
+        # --- Load History ---
+        if current_history is not None:
+            # Use history passed directly (e.g., from subsequent calls)
+            chunks.history = list(current_history) # Use a copy
+            if self.verbose:
+                print(f"Using {len(chunks.history)} messages from provided history.", file=sys.stderr)
+        else:
+            # No history file loading - use empty list if no current_history provided
+            chunks.history = []
+            if self.verbose:
+                print("No history file configured. Using only in-memory history (if any).", file=sys.stderr)
 
 
         # --- Context Building (Repo Map, Files) ---
         # This context is added *after* the history messages
         chunks.context = []
 
-        # Extract mentions from the user message
-        mentioned_files_from_msg = get_file_mentions(
-            self.user_message, self.root_dir, self.chat_files, self.read_only_files
-        )
-        mentioned_idents_from_msg = get_ident_mentions(self.user_message)
+        # Mentions for repo map context (not for adding to chat_files here)
+        # Extract from user message if provided (usually only for the first message)
+        mentioned_files_for_map = list(self.extra_mentioned_files)
+        mentioned_idents_for_map = list(self.extra_mentioned_idents)
+        if self.user_message: # Only extract from user_message if it's the current one being processed
+             mentioned_files_for_map.extend(get_file_mentions(
+                 self.user_message, self.root_dir, self.chat_files, self.read_only_files
+             ))
+             mentioned_idents_for_map.extend(get_ident_mentions(self.user_message))
 
-        # Combine explicit args with extracted mentions
-        all_mentioned_files = sorted(list(set(self.extra_mentioned_files + mentioned_files_from_msg)))
-        all_mentioned_idents = sorted(list(set(self.extra_mentioned_idents + mentioned_idents_from_msg)))
+        # Ensure uniqueness and sort
+        all_mentioned_files = sorted(list(set(mentioned_files_for_map)))
+        all_mentioned_idents = sorted(list(set(mentioned_idents_for_map)))
+
 
         if self.verbose:
-            print(f"Mentioned files for map: {all_mentioned_files}")
+            print(f"Mentioned files for map context: {all_mentioned_files}")
             print(f"Mentioned idents for map: {all_mentioned_idents}")
 
         # Generate Repo Map
@@ -477,6 +497,7 @@ class PromptBuilder:
         chunks.context.extend(get_chat_files_messages(
             chat_files_content,
             self.prompts,
+            self.chat_files, # Pass the list of chat files
             has_repo_map=bool(repo_map_content)
         ))
 
@@ -534,8 +555,6 @@ def main():
     # Add fence argument if needed, otherwise default
     parser.add_argument("--fence-open", default="```", help="Opening fence for code blocks")
     parser.add_argument("--fence-close", default="```", help="Closing fence for code blocks")
-    # Add argument for history file path
-    parser.add_argument("--history-file", default=".emigo_history.md", help="Path to the chat history markdown file.")
 
 
     args = parser.parse_args()
@@ -554,7 +573,6 @@ def main():
         no_shell=args.no_shell,
         fence_open=args.fence_open,
         fence_close=args.fence_close,
-        history_file=args.history_file, # Pass history file path
     )
 
     # Generate the messages

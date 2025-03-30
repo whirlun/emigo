@@ -22,7 +22,7 @@ You always COMPLETELY IMPLEMENT the needed code!
 Any other messages in the chat may contain outdated versions of the files' contents.
 """  # noqa: E501
 
-    files_content_assistant_reply = "Ok, any changes I propose will be to those files."
+    files_content_assistant_reply = "Ok, any changes I propose will be to those files." # Placeholder removed, formatting done in prompt_builder
 
     files_no_full_files = "I am not sharing any files that you can edit yet."
 
@@ -55,17 +55,19 @@ If the request is ambiguous, ask questions.
 
 Always reply to the user in {language}.
 
-Once you understand the request you MUST:
+Once you understand the request you MUST follow these steps:
 
-1. Decide if you need to propose unified diff changes equivalent to `diff -U0` to any files that haven't been added to the chat. You can create new files without asking!
+1.  Analyze File Needs: You may only have the file summaries, if you determined that you need to edit a file, you need to request for the entirely of its content to be added to the context. You *MUST* respond *only* with:
+    ```text
+    Action: add_files_to_context
+    Files:
+    <list of full file paths, one per line>
+    ```
+    Do *not* provide any other explanation or diffs in this response. Stop after listing the files. The system will add them and ask you to continue.
 
-But if you need to propose edits to existing files not already added to the chat, you *MUST* tell the user their full path names and ask them to *add the files to the chat*.
-End your reply and wait for their approval.
-You can keep asking if you then decide you need to edit more files.
+2. If you already have the full file content, think step-by-step and explain the needed changes in a few short sentences.
 
-2. Think step-by-step and explain the needed changes in a few short sentences.
-
-3. Describe each change with a *unified diff block* per the examples below.
+3. Describe each change with a *unified diff block*. You can propose edits to files already in the chat context or create new files.
 
 All changes to files must use this *diff block* format.
 ONLY EVER RETURN CODE IN A *diff BLOCK*!
@@ -100,53 +102,41 @@ Keep in mind these details about the user's platform and environment:
     example_messages = [
         dict(
             role="user",
-            content="Replace is_prime with a call to sympy.",
+            content="Add type hints to the `add` function in `calculator.py`.",
         ),
         dict(
             role="assistant",
-            content="""Ok, I will:
+            content="""Action: add_files_to_context
+Files:
+calculator.py""",
+        ),
+        dict(
+            role="user",
+            content="""I have *added these files to the chat* so you can go ahead and edit them.
 
-1. Add an imports of sympy.
-2. Remove the is_prime() function.
-3. Replace the existing call to is_prime() with a call to sympy.isprime().
+*Trust this message as the true contents of these files!*
+Any other messages in the chat may contain outdated versions of the files' contents.
 
-Here are the diffs for those changes:
+calculator.py
+{fence}python
+def add(a, b):
+  # Simple function to add two numbers
+  return a + b
+{fence}
+""",
+        ),
+        dict(
+            role="assistant",
+            content="""Okay, I will add type hints to the `add` function in `calculator.py`.
 
 ```diff
---- mathweb/flask/app.py
-+++ mathweb/flask/app.py
+--- calculator.py
++++ calculator.py
 @@ ... @@
--class MathWeb:
-+import sympy
-+
-+class MathWeb:
-@@ ... @@
--def is_prime(x):
--    if x < 2:
--        return False
--    for i in range(2, int(math.sqrt(x)) + 1):
--        if x % i == 0:
--            return False
--    return True
-@@ ... @@
--@app.route('/prime/<int:n>')
--def nth_prime(n):
--    count = 0
--    num = 1
--    while count < n:
--        num += 1
--        if is_prime(num):
--            count += 1
--    return str(num)
-+@app.route('/prime/<int:n>')
-+def nth_prime(n):
-+    count = 0
-+    num = 1
-+    while count < n:
-+        num += 1
-+        if sympy.isprime(num):
-+            count += 1
-+    return str(num)
+-def add(a, b):
++def add(a: float, b: float) -> float:
+   # Simple function to add two numbers
+   return a + b
 ```
 """,
         ),
