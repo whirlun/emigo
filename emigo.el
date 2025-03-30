@@ -576,20 +576,19 @@ Otherwise return nil."
             (insert content))
 
           (when (equal role "llm")
-            (let* ((llm-start-pos (save-excursion
-                                    (goto-char (point-max))
-                                    (search-backward-regexp "\nAssistant:\n" nil t)))
-                   (diff-start-pos (save-excursion
-                                     (goto-char (point-max))
-                                     (search-backward-regexp "^```diff\n---" llm-start-pos t)))
-                   (diff-end-pos (save-excursion
+            (let ((llm-start-pos (save-excursion
                                    (goto-char (point-max))
-                                   (search-backward-regexp "^```" llm-start-pos t))))
-              (when (and diff-start-pos diff-end-pos
-                         (< diff-start-pos diff-end-pos))
-                (emigo-highlight-diff-region diff-start-pos diff-end-pos)
-                (emigo-toggle-truncate-in-region diff-start-pos diff-end-pos)
-                )))
+                                   (search-backward-regexp "\nAssistant:\n" nil t))))
+              (when llm-start-pos
+                ;; Iteratively find all diff blocks and highlight them
+                (save-excursion
+                  (goto-char llm-start-pos)
+                  (while (re-search-forward "^```diff$" (point-max) t)
+                    (let ((diff-start (match-beginning 0)))
+                      (when (re-search-forward "^```$" (point-max) t)
+                        (let ((diff-end (match-end 0)))
+                          (emigo-highlight-diff-region diff-start diff-end)
+                          (emigo-toggle-truncate-in-region diff-start diff-end)))))))))
 
           (goto-char (point-max))
           (search-backward-regexp (concat "^" emigo-prompt-string) nil t)
