@@ -345,8 +345,44 @@ Otherwise return nil."
   (let ((buffer (get-buffer-create (format " *emigo %s*" project-path))))
     (add-to-list 'emigo-project-buffers buffer)
     (with-current-buffer buffer
+      (emigo-update-header-line project-path)
+
+      (setq-local left-margin-width 1)
+      (setq-local right-margin-width 1)
+
       (setq-local emigo--project-path project-path))
     buffer))
+
+(defun emigo-update-header-line (project-path)
+  (setq header-line-format (concat
+                            (propertize (format " %s" (emigo-format-project-path project-path)) 'face font-lock-constant-face))))
+
+(defun emigo-shrink-dir-name (input-string)
+  (let* ((words (split-string input-string "-"))
+         (abbreviated-words (mapcar (lambda (word) (substring word 0 (min 1 (length word)))) words)))
+    (mapconcat 'identity abbreviated-words "-")))
+
+(defun emigo-format-project-path (project-path)
+  (let* ((file-path (split-string project-path "/" t))
+         (full-num 2)
+         (show-name nil)
+         shown-path)
+    (setq show-path
+          (if buffer-file-name
+              (if show-name file-path (butlast file-path))
+            file-path))
+    (setq show-path (nthcdr (- (length show-path)
+                               (if buffer-file-name
+                                   (if show-name (1+ full-num) full-num)
+                                 (1+ full-num)))
+                            show-path))
+    ;; Shrink parent directory name to save minibuffer space.
+    (setq show-path
+          (append (mapcar #'emigo-shrink-dir-name (butlast show-path))
+                  (last show-path)))
+    ;; Join paths.
+    (setq show-path (mapconcat #'identity show-path "/"))
+    show-path))
 
 (defun emigo-create-ai-window (project-path)
   (save-excursion
@@ -413,7 +449,7 @@ This advice can make `other-window' skip `emigo' dedicated window."
   (interactive)
   (unless (emigo-epc-live-p emigo-epc-process)
     (message "[Emigo] Process not running.")
-    (emigo-start-process) ; Attempt to start if not running
+    (emigo-start-process)            ; Attempt to start if not running
     (error "Emigo process was not running, please try again shortly."))
 
   (let* ((current-buffer-file (buffer-file-name (current-buffer)))
@@ -444,7 +480,7 @@ This advice can make `other-window' skip `emigo' dedicated window."
   (interactive)
   (unless (emigo-epc-live-p emigo-epc-process)
     (message "[Emigo] Process not running.")
-    (emigo-start-process) ; Attempt to start if not running
+    (emigo-start-process)            ; Attempt to start if not running
     (error "Emigo process was not running, please try again shortly."))
 
   (let* ((current-buffer-file (buffer-file-name (current-buffer)))
