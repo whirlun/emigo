@@ -328,7 +328,7 @@ Then Emigo will start by gdb, please send new issue with `*emigo*' buffer conten
 
 (defun emigo-update-header-line (session-path)
   (setq header-line-format (concat
-                            (propertize (format " %s" (emigo-format-session-path session-path)) 'face font-lock-constant-face))))
+                            (propertize (format " Project [%s]" (emigo-format-session-path session-path)) 'face font-lock-constant-face))))
 
 (defun emigo-shrink-dir-name (input-string)
   (let* ((words (split-string input-string "-"))
