@@ -545,9 +545,27 @@ Otherwise return nil."
           (search-backward-regexp (concat "^" emigo-prompt-string) nil t)
           (forward-line -2)
           (goto-char (line-end-position))
+
           (if (equal role "user")
               (insert (propertize content 'face font-lock-keyword-face))
-            (insert content)))))))
+            (insert content))
+
+          (goto-char (point-max))
+          (search-backward-regexp (concat "^" emigo-prompt-string) nil t)
+          (forward-char (1- (length emigo-prompt-string)))
+          (emigo-lock-region (point-min) (point))
+          )))))
+
+(defun emigo-lock-region (beg end)
+  "Super-lock the region from BEG to END."
+  (interactive "r")
+  (put-text-property beg end 'read-only t)
+  (let ((overlay (make-overlay beg end)))
+    (overlay-put overlay 'modification-hooks
+                 (list (lambda (&rest args)
+                         (message "This region is super-locked!"))))
+    (overlay-put overlay 'front-sticky t)
+    (overlay-put overlay 'rear-nonsticky nil)))
 
 (defun emigo-dedicated-split-window ()
   "Split dedicated window at bottom of frame."
