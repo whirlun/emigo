@@ -187,6 +187,11 @@ Then Emigo will start by gdb, please send new issue with `*emigo*' buffer conten
   "Enable this option to output performance data to ~/emigo.prof."
   :type 'boolean)
 
+(defcustom emigo-prompt-string "Emigo> "
+  "The prompt string used in Emigo buffers."
+  :type 'string
+  :group 'emigo)
+
 (defun emigo--user-emacs-directory ()
   "Get lang server with project path, file path or file extension."
   (expand-file-name user-emacs-directory))
@@ -496,13 +501,13 @@ Otherwise return nil."
   (run-hooks 'emigo-mode-hook))
 
 (defun emigo-beginning-of-line ()
-  "Send the current prompt to the AI."
+  "Move to the beginning of the current line or the prompt position."
   (interactive)
   (if (save-excursion
-        (search-backward-regexp "EMIGO>: " (line-beginning-position) t))
+        (search-backward-regexp (concat "^" emigo-prompt-string) (line-beginning-position) t))
       (progn
         (goto-char (line-beginning-position))
-        (forward-char (length "EMIGO>: ")))
+        (forward-char (length emigo-prompt-string)))
     (goto-char (line-beginning-position))))
 
 (defun emigo-send-prompt ()
@@ -510,14 +515,14 @@ Otherwise return nil."
   (interactive)
   (let ((prompt (save-excursion
                   (goto-char (point-max))
-                  (search-backward-regexp "^EMIGO>: " nil t)
-                  (forward-char (length "EMIGO>: "))
+                  (search-backward-regexp (concat "^" emigo-prompt-string) nil t)
+                  (forward-char (length emigo-prompt-string))
                   (string-trim (buffer-substring-no-properties (point) (point-max)))
                   )))
     (if (string-empty-p prompt)
         (message "Please type prompt to send.")
-      (search-backward-regexp "^EMIGO>: " nil t)
-      (forward-char (length "EMIGO>: "))
+      (search-backward-regexp (concat "^" emigo-prompt-string) nil t)
+      (forward-char (length emigo-prompt-string))
       (delete-region (point) (point-max))
       (emigo-call-async "emigo_session" emigo-session-path prompt))))
 
@@ -532,11 +537,11 @@ Otherwise return nil."
     (with-current-buffer buffer
       (when init
         (goto-char (point-min))
-        (insert (propertize "\n\nEMIGO>: " 'face font-lock-keyword-face)))
+        (insert (propertize (concat "\n\n" emigo-prompt-string) 'face font-lock-keyword-face)))
 
       (let ((inhibit-read-only t)) ;; Allow modification even if buffer is read-only
         (goto-char (point-max))
-        (search-backward-regexp "^EMIGO>: " nil t)
+        (search-backward-regexp (concat "^" emigo-prompt-string) nil t)
         (forward-line -2)
         (goto-char (line-end-position))
         (if (equal role "user")
