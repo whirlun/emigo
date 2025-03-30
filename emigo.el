@@ -266,6 +266,7 @@ Then Emigo will start by gdb, please send new issue with `*emigo*' buffer conten
 
 (defun emigo (prompt)
   (interactive "sEmigo: ")
+  (setq prompt (substring-no-properties prompt))
   (if (boundp 'emigo--project-path)
       (emigo-call-async "emigo_project" emigo--project-path prompt)
     (emigo-call-async "emigo" (buffer-file-name) prompt)))
