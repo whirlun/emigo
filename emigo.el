@@ -575,20 +575,21 @@ Otherwise return nil."
               (insert (propertize content 'face font-lock-keyword-face))
             (insert content))
 
-          (let* ((llm-start-pos (save-excursion
-                                  (goto-char (point-max))
-                                  (search-backward-regexp "\nAssistant:\n" nil t)))
-                 (diff-start-pos (save-excursion
+          (when (equal role "llm")
+            (let* ((llm-start-pos (save-excursion
+                                    (goto-char (point-max))
+                                    (search-backward-regexp "\nAssistant:\n" nil t)))
+                   (diff-start-pos (save-excursion
+                                     (goto-char (point-max))
+                                     (search-backward-regexp "^```diff\n---" llm-start-pos t)))
+                   (diff-end-pos (save-excursion
                                    (goto-char (point-max))
-                                   (search-backward-regexp "^```diff\n---" llm-start-pos t)))
-                 (diff-end-pos (save-excursion
-                                 (goto-char (point-max))
-                                 (search-backward-regexp "^```" llm-start-pos t))))
-            (when (and diff-start-pos diff-end-pos
-                       (< diff-start-pos diff-end-pos))
-              (emigo-highlight-diff-region diff-start-pos diff-end-pos)
-              (emigo-toggle-truncate-in-region diff-start-pos diff-end-pos)
-              ))
+                                   (search-backward-regexp "^```" llm-start-pos t))))
+              (when (and diff-start-pos diff-end-pos
+                         (< diff-start-pos diff-end-pos))
+                (emigo-highlight-diff-region diff-start-pos diff-end-pos)
+                (emigo-toggle-truncate-in-region diff-start-pos diff-end-pos)
+                )))
 
           (goto-char (point-max))
           (search-backward-regexp (concat "^" emigo-prompt-string) nil t)
