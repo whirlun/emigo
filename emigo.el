@@ -316,17 +316,17 @@ Then Emigo will start by gdb, please send new issue with `*emigo*' buffer conten
     (string-trim (buffer-string))))
 
 
-(defun emigo-update-header-line (project-path)
+(defun emigo-update-header-line (session-path)
   (setq header-line-format (concat
-                            (propertize (format " %s" (emigo-format-project-path project-path)) 'face font-lock-constant-face))))
+                            (propertize (format " %s" (emigo-format-session-path session-path)) 'face font-lock-constant-face))))
 
 (defun emigo-shrink-dir-name (input-string)
   (let* ((words (split-string input-string "-"))
          (abbreviated-words (mapcar (lambda (word) (substring word 0 (min 1 (length word)))) words)))
     (mapconcat 'identity abbreviated-words "-")))
 
-(defun emigo-format-project-path (project-path)
-  (let* ((file-path (split-string project-path "/" t))
+(defun emigo-format-session-path (session-path)
+  (let* ((file-path (split-string session-path "/" t))
          (full-num 2)
          (show-name nil)
          shown-path)
