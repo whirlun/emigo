@@ -2,73 +2,26 @@
 
 ;; Filename: emigo.el
 ;; Description: Emigo
-;; Author: Andy Stewart <lazycat.manatee@gmail.com>
-;; Maintainer: Andy Stewart <lazycat.manatee@gmail.com>
-;; Copyright (C) 2018, Andy Stewart, all rights reserved.
-;; Created: 2018-06-15 14:10:12
+;; Authors: Mingde (Matthew) Zeng <matthewzmd@posteo.net>
+;;          Andy Stewart <lazycat.manatee@gmail.com>
+;; Maintainer: Mingde (Matthew) Zeng <matthewzmd@posteo.net>
+;;             Andy Stewart <lazycat.manatee@gmail.com>
+;; Copyright (C) 2025, Emigo, all rights reserved.
+;; Created: 2025-03-29
 ;; Version: 0.5
-;; Last-Updated: 2023-08-12 21:08:48
-;;           By: Andy Stewart
-;; URL: https://github.com/manateelazycat/emigo
-;; Keywords:
-;; Compatibility: emacs-version >= 28
-;; Package-Requires: ((emacs "28") (posframe "1.1.7") (markdown-mode "2.6"))
-;;
-;; Features that might be required by this library:
-;;
-;; Please check README
+;; Last-Updated: Sat Mar 29 23:27:04 2025 (-0400)
+;;           By: Mingde (Matthew) Zeng
+;; Package-Requires: ((emacs "26.1") (transient "0.3.0") (compat "30.0.2.0"))
+;; Keywords: ai emacs llm aider ai-pair-programming tools
+;; URL: https://github.com/MatthewZMD/emigo
+;; SPDX-License-Identifier: Apache-2.0
 ;;
 
 ;;; This file is NOT part of GNU Emacs
 
-;;; License
-;;
-;; This program is free software; you can redistribute it and/or modify
-;; it under the terms of the GNU General Public License as published by
-;; the Free Software Foundation; either version 3, or (at your option)
-;; any later version.
-
-;; This program is distributed in the hope that it will be useful,
-;; but WITHOUT ANY WARRANTY; without even the implied warranty of
-;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-;; GNU General Public License for more details.
-
-;; You should have received a copy of the GNU General Public License
-;; along with this program; see the file COPYING.  If not, write to
-;; the Free Software Foundation, Inc., 51 Franklin Street, Fifth
-;; Floor, Boston, MA 02110-1301, USA.
-
 ;;; Commentary:
-;;
+
 ;; Emigo
-;;
-
-;;; Installation:
-;;
-;; Please check README
-;;
-
-;;; Customize:
-;;
-;;
-;;
-;; All of the above can customize by:
-;;      M-x customize-group RET emigo RET
-;;
-
-;;; Change log:
-;;
-;;
-
-;;; Acknowledgements:
-;;
-;;
-;;
-
-;;; TODO
-;;
-;;
-;;
 
 ;;; Code:
 (require 'cl-lib)
@@ -454,6 +407,64 @@ This advice can make `other-window' skip `emigo' dedicated window."
     (when (and (emigo-window-exist-p emigo-dedicated-window)
                (eq emigo-dedicated-window (selected-window)))
       (other-window count))))
+
+(defun emigo-remove-file-from-context ()
+  "Remove a file from the current project's Emigo chat context."
+  (interactive)
+  (unless (emigo-epc-live-p emigo-epc-process)
+    (message "[Emigo] Process not running.")
+    (emigo-start-process) ; Attempt to start if not running
+    (error "Emigo process was not running, please try again shortly."))
+
+  (let* ((current-buffer-file (buffer-file-name (current-buffer)))
+         (project-path (cond
+                        ((boundp 'emigo--project-path) emigo--project-path) ; Use buffer-local if available
+                        (current-buffer-file (emigo--get-project-path-func current-buffer-file))
+                        (t (error "[Emigo] Cannot determine project path"))))
+         (chat-files (emigo-call--sync "get_chat_files" project-path))
+         (file-to-remove nil))
+
+    (unless project-path
+      (error "[Emigo] Could not determine project path"))
+
+    (unless chat-files
+      (message "[Emigo] No files currently in chat context for %s" project-path)
+      (cl-return-from emigo-remove-file-from-context))
+
+    (setq file-to-remove (completing-read "Remove file from context: " chat-files nil t))
+
+    (when (and file-to-remove (member file-to-remove chat-files))
+      (emigo-call-async "remove_file_from_context" project-path file-to-remove)
+      ;; Message will be sent from Python side upon successful removal
+      )
+    ))
+
+(defun emigo-list-context-files ()
+  "List the files currently in the Emigo chat context for the current project."
+  (interactive)
+  (unless (emigo-epc-live-p emigo-epc-process)
+    (message "[Emigo] Process not running.")
+    (emigo-start-process) ; Attempt to start if not running
+    (error "Emigo process was not running, please try again shortly."))
+
+  (let* ((current-buffer-file (buffer-file-name (current-buffer)))
+         (project-path (cond
+                        ((boundp 'emigo--project-path) emigo--project-path) ; Use buffer-local if available
+                        (current-buffer-file (emigo--get-project-path-func current-buffer-file))
+                        (t (error "[Emigo] Cannot determine project path"))))
+         (chat-files nil))
+
+    (unless project-path
+      (error "[Emigo] Could not determine project path"))
+
+    (setq chat-files (emigo-call--sync "get_chat_files" project-path))
+
+    (if chat-files
+        (message "[Emigo] Files added in %s: %s"
+                 project-path
+                 (mapconcat #'identity chat-files ", "))
+      (message "[Emigo] No files currently in chat context for %s" project-path))
+    ))
 
 (provide 'emigo)
 
