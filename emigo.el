@@ -9,7 +9,7 @@
 ;; Copyright (C) 2025, Emigo, all rights reserved.
 ;; Created: 2025-03-29
 ;; Version: 0.5
-;; Last-Updated: Sun Mar 30 02:45:57 2025 (-0400)
+;; Last-Updated: Sun Mar 30 02:52:04 2025 (-0400)
 ;;           By: Mingde (Matthew) Zeng
 ;; Package-Requires: ((emacs "26.1") (transient "0.3.0") (compat "30.0.2.0"))
 ;; Keywords: ai emacs llm aider ai-pair-programming tools
@@ -330,7 +330,7 @@ as the session path."
          (buffer (get-buffer-create buffer-name))
          (prompt (read-string (format "Emigo Prompt (%s): "
                                      (if current-prefix-arg default-directory "project root")))))
-
+    (setq prompt (substring-no-properties prompt))
     ;; Ensure EPC process is running or starting
     (unless (emigo-epc-live-p emigo-epc-process)
       (emigo-start-process))
