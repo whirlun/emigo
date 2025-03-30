@@ -575,6 +575,20 @@ Otherwise return nil."
               (insert (propertize content 'face font-lock-keyword-face))
             (insert content))
 
+          ;; Apply gfm-view-mode to the assistant's response
+          (when (equal role "llm")
+            (save-excursion
+              (goto-char (point-max))
+              (search-backward-regexp (concat "^" emigo-prompt-string) nil t)
+              (let ((end-pos (point)))
+                (search-backward-regexp "\nAssistant:\n" nil t)
+                (forward-char (length "\nAssistant:\n"))
+                (let ((start-pos (point)))
+                  ;; Apply gfm-view-mode to the region
+                  (gfm-view-mode)
+                  ;; Ensure the region is properly highlighted
+                  (font-lock-ensure start-pos end-pos)))))
+
           (goto-char (point-max))
           (search-backward-regexp (concat "^" emigo-prompt-string) nil t)
           (forward-char (1- (length emigo-prompt-string)))
