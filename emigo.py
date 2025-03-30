@@ -104,10 +104,9 @@ class Emigo:
         print(f"Starting session with path: {session_path}", file=sys.stderr)
         # First print the prompt to buffer
         if session_path in self.llm_client_dict:
-            prompt_title = "\n\nUser:\n{}\n"
+            eval_in_emacs("emigo-flush-buffer", session_path, "\n\nUser:\n{}\n".format(prompt), "user")
         else:
-            prompt_title = "\nUser:\n{}\n"
-        eval_in_emacs("emigo-flush-buffer", session_path, prompt_title.format(prompt), "user")
+            eval_in_emacs("emigo-flush-buffer", session_path, "\nUser:\n{}\n".format(prompt), "user", True)
 
         # --- Add mentioned files to context ---
         # Use session_path for validation

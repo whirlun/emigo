@@ -36,6 +36,11 @@
   "Emigo group."
   :group 'emigo)
 
+(defcustom emigo-mode-hook '()
+  "emigo mode hook."
+  :type 'hook
+  :group 'emigo)
+
 (defcustom emigo-model ""
   "Default AI model.")
 
@@ -369,6 +374,8 @@ as the session path."
 
     ;; Set buffer-local session path variable
     (with-current-buffer buffer
+      (emigo-mode)
+
       (emigo-update-header-line session-path)
       (setq-local emigo-session-path session-path))
 
@@ -468,7 +475,53 @@ Otherwise return nil."
   (set-window-buffer emigo-dedicated-window emigo-dedicated-buffer) ;; Ensure correct buffer is shown
   (set-window-dedicated-p (selected-window) t))
 
-(defun emigo-flush-buffer (session-path content role)
+(defvar emigo-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-a") #'emigo-beginning-of-line)
+    (define-key map (kbd "C-m") #'emigo-send-prompt)
+    (define-key map (kbd "C-c C-c") #'emigo-send-prompt)
+    (define-key map (kbd "C-c C-r") #'emigo-restart-process)
+    (define-key map (kbd "C-c C-f") #'emigo-remove-file-from-context)
+    (define-key map (kbd "C-c C-l") #'emigo-list-context-files)
+    map)
+  "Keymap used by `emigo-mode'.")
+
+(define-derived-mode emigo-mode fundamental-mode "emigo"
+  "Major mode for Emigo AI chat sessions.
+\\{emigo-mode-map}"
+  :group 'emigo
+  (setq major-mode 'emigo-mode)
+  (setq mode-name "emigo")
+  (use-local-map emigo-mode-map)
+  (run-hooks 'emigo-mode-hook))
+
+(defun emigo-beginning-of-line ()
+  "Send the current prompt to the AI."
+  (interactive)
+  (if (save-excursion
+        (search-backward-regexp "EMIGO>: " (line-beginning-position) t))
+      (progn
+        (goto-char (line-beginning-position))
+        (forward-char (length "EMIGO>: ")))
+    (goto-char (line-beginning-position))))
+
+(defun emigo-send-prompt ()
+  "Send the current prompt to the AI."
+  (interactive)
+  (let ((prompt (save-excursion
+                  (goto-char (point-max))
+                  (search-backward-regexp "^EMIGO>: " nil t)
+                  (forward-char (length "EMIGO>: "))
+                  (string-trim (buffer-substring-no-properties (point) (point-max)))
+                  )))
+    (if (string-empty-p prompt)
+        (message "Please type prompt to send.")
+      (search-backward-regexp "^EMIGO>: " nil t)
+      (forward-char (length "EMIGO>: "))
+      (delete-region (point) (point-max))
+      (emigo-call-async "emigo_session" emigo-session-path prompt))))
+
+(defun emigo-flush-buffer (session-path content role &rest init)
   "Flush CONTENT to the Emigo buffer associated with SESSION-PATH."
   (let ((buffer-name (emigo-get-buffer-name nil session-path))
         (buffer (get-buffer (emigo-get-buffer-name t session-path)))) ;; Find existing buffer
@@ -477,8 +530,15 @@ Otherwise return nil."
       (cl-return-from emigo-flush-buffer))
 
     (with-current-buffer buffer
+      (when init
+        (goto-char (point-min))
+        (insert (propertize "\n\nEMIGO>: " 'face font-lock-keyword-face)))
+
       (let ((inhibit-read-only t)) ;; Allow modification even if buffer is read-only
         (goto-char (point-max))
+        (search-backward-regexp "^EMIGO>: " nil t)
+        (forward-line -2)
+        (goto-char (line-end-position))
         (if (equal role "user")
             (insert (propertize content 'face font-lock-keyword-face))
           (insert content))))))
