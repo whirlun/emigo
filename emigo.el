@@ -575,20 +575,65 @@ Otherwise return nil."
               (insert (propertize content 'face font-lock-keyword-face))
             (insert content))
 
+          (let* ((llm-start-pos (save-excursion
+                                  (goto-char (point-max))
+                                  (search-backward-regexp "\nAssistant:\n" nil t)))
+                 (diff-start-pos (save-excursion
+                                   (goto-char (point-max))
+                                   (search-backward-regexp "^```diff\n---" llm-start-pos t)))
+                 (diff-end-pos (save-excursion
+                                 (goto-char (point-max))
+                                 (search-backward-regexp "^```" llm-start-pos t))))
+            (when (and diff-start-pos diff-end-pos
+                       (< diff-start-pos diff-end-pos))
+              (emigo-highlight-diff-region diff-start-pos diff-end-pos)
+              ))
+
           (goto-char (point-max))
           (search-backward-regexp (concat "^" emigo-prompt-string) nil t)
           (forward-char (1- (length emigo-prompt-string)))
           (emigo-lock-region (point-min) (point))
           )))))
 
+(defun emigo-highlight-diff-region (beg end)
+  "Apply custom syntax highlighting to diff text in the selected region."
+  (interactive)
+  (with-silent-modifications
+    ;; First clear existing highlights
+    (remove-text-properties beg end '(font-lock-face nil))
+
+    ;; Scan line by line and apply highlighting
+    (save-excursion
+      (goto-char beg)
+      (while (< (point) end)
+        (beginning-of-line)
+        (let ((line-end (min end (line-end-position)))
+              (first-char (char-after)))
+          (cond
+           ;; Added lines (+)
+           ((eq first-char ?+)
+            (add-text-properties (point) line-end
+                                 '(font-lock-face (:foreground "green"))))
+           ;; Deleted lines (-)
+           ((eq first-char ?-)
+            (add-text-properties (point) line-end
+                                 '(font-lock-face (:foreground "red"))))
+           ;; Context information lines (@)
+           ((eq first-char ?@)
+            (add-text-properties (point) line-end
+                                 '(font-lock-face (:foreground "cyan" :weight bold))))
+           ;; Index lines, filenames and other metadata
+           ((or (eq first-char ?d) (eq first-char ?i) (looking-at "^index\\|^---\\|^\\+\\+\\+"))
+            (add-text-properties (point) line-end
+                                 '(font-lock-face (:foreground "blue" :weight bold))))))
+        (forward-line 1)))))
+
 (defun emigo-lock-region (beg end)
   "Super-lock the region from BEG to END."
   (interactive "r")
   (put-text-property beg end 'read-only t)
   (let ((overlay (make-overlay beg end)))
-    (overlay-put overlay 'modification-hooks
-                 (list (lambda (&rest args)
-                         (message "This region is super-locked!"))))
+    (overlay-put overlay 'modification-hooks (list (lambda (&rest args))))
     (overlay-put overlay 'front-sticky t)
     (overlay-put overlay 'rear-nonsticky nil)))
 
