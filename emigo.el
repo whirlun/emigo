@@ -121,24 +121,24 @@ If USE-EXISTING is non-nil, try to find an existing buffer.
 SESSION-PATH defaults to the path determined by `emigo-project-root` or `default-directory`.
 Searches parent directories for existing sessions."
   (let* ((current-session-path (file-truename (or session-path
-                                                   (if current-prefix-arg ;; Check prefix arg for context
-                                                       default-directory
-                                                     (emigo-project-root)))))
+                                                  (if current-prefix-arg ;; Check prefix arg for context
+                                                      default-directory
+                                                    (emigo-project-root)))))
          (target-buffer-name (format "*emigo:%s*" current-session-path)))
     (if use-existing
         (or (and (get-buffer target-buffer-name) target-buffer-name) ;; Exact match first
             ;; Search parent directories for existing sessions
             (let* ((emigo-buffers (seq-filter #'emigo--is-emigo-buffer-p (buffer-list)))
                    (buffer-session-paths
-                      (mapcar (lambda (buf)
-                                (when (string-match "^\\*emigo:\\(.*?\\)\\*$" (buffer-name buf))
-                                  (match-string 1 (buffer-name buf))))
-                              emigo-buffers))
-                     ;; Find closest parent directory that has an emigo session
-                     (closest-parent-session-path
-                      (car (sort (seq-filter (lambda (path)
-                                               (and path
-                                                    (file-in-directory-p current-session-path path)
+                    (mapcar (lambda (buf)
+                              (when (string-match "^\\*emigo:\\(.*?\\)\\*$" (buffer-name buf))
+                                (match-string 1 (buffer-name buf))))
+                            emigo-buffers))
+                   ;; Find closest parent directory that has an emigo session
+                   (closest-parent-session-path
+                    (car (sort (seq-filter (lambda (path)
+                                             (and path
+                                                  (file-in-directory-p current-session-path path)
                                                   (file-exists-p path)))
                                            buffer-session-paths)
                                (lambda (a b) (> (length a) (length b))))))) ;; Sort by length (deepest first)
@@ -150,7 +150,7 @@ Searches parent directories for existing sessions."
 
 ;; --- End new functions ---
 
-(defvar emigo-project-buffers nil) ;; Keep track of buffer objects
+(defvar emigo-project-buffers nil)   ;; Keep track of buffer objects
 (defvar-local emigo-session-path nil ;; Buffer-local session path
   "The session path (project root or current dir) associated with this Emigo buffer.")
 ;; Removed emigo-project-root buffer-local variable
@@ -196,7 +196,7 @@ Then Emigo will start by gdb, please send new issue with `*emigo*' buffer conten
   "Call Python EPC function METHOD and ARGS asynchronously."
   (if (emigo-epc-live-p emigo-epc-process)
       (emigo-deferred-chain
-       (emigo-epc-call-deferred emigo-epc-process (read method) args))
+        (emigo-epc-call-deferred emigo-epc-process (read method) args))
     ;; If process not live, queue the first call details
     (setq emigo-first-call-method method)
     (setq emigo-first-call-args args)
@@ -315,6 +315,38 @@ Then Emigo will start by gdb, please send new issue with `*emigo*' buffer conten
     (insert-file-contents filepath)
     (string-trim (buffer-string))))
 
+
+(defun emigo-update-header-line (project-path)
+  (setq header-line-format (concat
+                            (propertize (format " %s" (emigo-format-project-path project-path)) 'face font-lock-constant-face))))
+
+(defun emigo-shrink-dir-name (input-string)
+  (let* ((words (split-string input-string "-"))
+         (abbreviated-words (mapcar (lambda (word) (substring word 0 (min 1 (length word)))) words)))
+    (mapconcat 'identity abbreviated-words "-")))
+
+(defun emigo-format-project-path (project-path)
+  (let* ((file-path (split-string project-path "/" t))
+         (full-num 2)
+         (show-name nil)
+         shown-path)
+    (setq show-path
+          (if buffer-file-name
+              (if show-name file-path (butlast file-path))
+            file-path))
+    (setq show-path (nthcdr (- (length show-path)
+                               (if buffer-file-name
+                                   (if show-name (1+ full-num) full-num)
+                                 (1+ full-num)))
+                            show-path))
+    ;; Shrink parent directory name to save minibuffer space.
+    (setq show-path
+          (append (mapcar #'emigo-shrink-dir-name (butlast show-path))
+                  (last show-path)))
+    ;; Join paths.
+    (setq show-path (mapconcat #'identity show-path "/"))
+    show-path))
+
 ;; Define the main entry point command
 ;;;###autoload
 (defun emigo ()
@@ -329,7 +361,7 @@ as the session path."
          (buffer-name (emigo-get-buffer-name nil session-path))
          (buffer (get-buffer-create buffer-name))
          (prompt (read-string (format "Emigo Prompt (%s): "
-                                     (if current-prefix-arg default-directory "project root")))))
+                                      (if current-prefix-arg default-directory "project root")))))
     (setq prompt (substring-no-properties prompt))
     ;; Ensure EPC process is running or starting
     (unless (emigo-epc-live-p emigo-epc-process)
@@ -337,6 +369,7 @@ as the session path."
 
     ;; Set buffer-local session path variable
     (with-current-buffer buffer
+      (emigo-update-header-line session-path)
       (setq-local emigo-session-path session-path))
 
     ;; Add buffer to tracked list
