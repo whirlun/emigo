@@ -539,14 +539,15 @@ Otherwise return nil."
         (goto-char (point-min))
         (insert (propertize (concat "\n\n" emigo-prompt-string) 'face font-lock-keyword-face)))
 
-      (let ((inhibit-read-only t)) ;; Allow modification even if buffer is read-only
-        (goto-char (point-max))
-        (search-backward-regexp (concat "^" emigo-prompt-string) nil t)
-        (forward-line -2)
-        (goto-char (line-end-position))
-        (if (equal role "user")
-            (insert (propertize content 'face font-lock-keyword-face))
-          (insert content))))))
+      (save-excursion
+        (let ((inhibit-read-only t)) ;; Allow modification even if buffer is read-only
+          (goto-char (point-max))
+          (search-backward-regexp (concat "^" emigo-prompt-string) nil t)
+          (forward-line -2)
+          (goto-char (line-end-position))
+          (if (equal role "user")
+              (insert (propertize content 'face font-lock-keyword-face))
+            (insert content)))))))
 
 (defun emigo-dedicated-split-window ()
   "Split dedicated window at bottom of frame."
