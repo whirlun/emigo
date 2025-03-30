@@ -405,6 +405,29 @@ as the session path."
 (defvar emigo-dedicated-buffer nil
   "The dedicated `emigo' buffer.")
 
+(defvar emigo-saved-window-width nil
+  "Saved width of emigo dedicated window before ediff.")
+
+(defun emigo-save-window-width ()
+  "Save the current width of emigo dedicated window before ediff."
+  (when (and emigo-dedicated-window (window-live-p emigo-dedicated-window))
+    (setq emigo-saved-window-width (window-width emigo-dedicated-window))))
+
+(defun emigo-restore-window-width ()
+  "Restore the saved width of emigo dedicated window after ediff."
+  (when (and emigo-dedicated-window
+             (window-live-p emigo-dedicated-window)
+             emigo-saved-window-width)
+    (let ((current-width (window-width emigo-dedicated-window)))
+      (unless (= current-width emigo-saved-window-width)
+        (window-resize emigo-dedicated-window
+                       (- emigo-saved-window-width current-width)
+                       t)))))
+
+;; Add hooks for ediff
+(add-hook 'ediff-before-setup-hook #'emigo-save-window-width)
+(add-hook 'ediff-quit-hook #'emigo-restore-window-width)
+
 (defun emigo-current-window-take-height (&optional window)
   "Return the height the `window' takes up.
 Not the value of `window-width', it returns usable rows available for WINDOW.
@@ -458,7 +481,9 @@ Otherwise return nil."
   (setq emigo-dedicated-window (display-buffer (current-buffer) `(display-buffer-in-side-window (side . right) (window-width . ,emigo-dedicated-window-width))))
   (select-window emigo-dedicated-window)
   (set-window-buffer emigo-dedicated-window emigo-dedicated-buffer)
-  (set-window-dedicated-p (selected-window) t))
+  (set-window-dedicated-p (selected-window) t)
+  ;; Save initial window width
+  (setq emigo-saved-window-width (window-width emigo-dedicated-window)))
 
 (defun emigo-dedicated-select-window ()
   "Select emigo dedicated window."
