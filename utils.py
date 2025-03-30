@@ -119,30 +119,6 @@ def convert_emacs_bool(symbol_value, symbol_is_boolean):
     else:
         return symbol_value
 
-
-def get_project_path(filepath):
-    project_path = get_emacs_func_result("get-project-path", filepath)
-
-    if isinstance(project_path, str):
-        return project_path
-    else:
-        import os
-        dir_path = os.path.dirname(filepath)
-        if get_command_result("git rev-parse --is-inside-work-tree", dir_path) == "true":
-            path_from_git = get_command_result("git rev-parse --show-toplevel", dir_path)
-            if get_os_name() == "windows":
-                path_parts = path_from_git.split("/")
-                # if this is a Unix-style absolute path, which should be a Windows-style one
-                if path_parts[0] == "/":
-                    windows_path = path_parts[1] + ":/" + "/".join(path_parts[2:])
-                    return windows_path
-                else:
-                    return path_from_git
-            else:
-                return path_from_git
-        else:
-            return filepath
-
 def get_emacs_vars(args):
     return list(map(lambda result: convert_emacs_bool(result[0], result[1]) if result != [] else False,
                     epc_client.call_sync("get-emacs-vars", args)))    # type: ignore
@@ -162,7 +138,7 @@ def get_emacs_func_result(method_name, *args):
 
 def get_command_result(command_string, cwd):
     import subprocess
-    
+
     process = subprocess.Popen(command_string, cwd=cwd, shell=True, text=True,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                encoding="utf-8")

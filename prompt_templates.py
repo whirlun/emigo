@@ -26,7 +26,7 @@ Any other messages in the chat may contain outdated versions of the files' conte
 
     files_no_full_files = "I am not sharing any files that you can edit yet."
 
-    files_no_full_files_with_repo_map = """Don't try and edit any existing code without asking me to add the files to the chat first!
+    files_no_full_files_with_repo_map = """Don't try and edit any existing code without using `Action: add_files_to_context` to add the files to the chat first!
 Based on my request and the file summaries, identify the files most likely to **need changes**.
 Respond by requesting these files using the `Action: add_files_to_context` format.
 Only include files that are likely to *need edits*. Do not include files just for context.

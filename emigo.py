@@ -36,8 +36,8 @@ class Emigo:
         init_epc_client(int(args[0]))
 
         # Init vars.
-        self.llm_client_dict = {}
-        self.project_chat_files = {} # Tracks files in context per project_path
+        self.llm_client_dict = {} # Key: session_path
+        self.chat_files = {} # Key: session_path, Value: list of relative file paths
         self.thread_queue = []
 
         # Build EPC server.
@@ -53,6 +53,8 @@ class Emigo:
         # self.server.logger = logger
 
         self.server.register_instance(self)  # register instance functions let elisp side call
+        # Register functions callable from Elisp. Note the first arg is implicitly session_path.
+        self.server.register_function(self.emigo_session)
         self.server.register_function(self.get_chat_files)
         self.server.register_function(self.remove_file_from_context)
 
@@ -81,80 +83,68 @@ class Emigo:
         except:
             logger.error(traceback.format_exc())
 
-    def get_chat_files(self, project_path):
-        """Returns the list of files currently in the chat context for a project."""
-        return self.project_chat_files.get(project_path, [])
+    def get_chat_files(self, session_path):
+        """Returns the list of files currently in the chat context for a session."""
+        return self.chat_files.get(session_path, [])
 
-    def remove_file_from_context(self, project_path, filename):
-        """Removes a specific file from the chat context for a project."""
-        if project_path in self.project_chat_files:
-            if filename in self.project_chat_files[project_path]:
-                self.project_chat_files[project_path].remove(filename)
-                message_emacs(f"Removed '{filename}' from chat context.")
+    def remove_file_from_context(self, session_path, filename):
+        """Removes a specific file from the chat context for a session."""
+        if session_path in self.chat_files:
+            if filename in self.chat_files[session_path]:
+                self.chat_files[session_path].remove(filename)
+                message_emacs(f"Removed '{filename}' from chat context for session: {os.path.basename(session_path)}")
                 return True
             else:
-                message_emacs(f"File '{filename}' not found in chat context for project '{project_path}'.")
+                message_emacs(f"File '{filename}' not found in chat context for session: {os.path.basename(session_path)}")
                 return False
         else:
-            message_emacs(f"No chat context found for project '{project_path}'.")
+            message_emacs(f"No chat context found for session: {os.path.basename(session_path)}")
             return False
 
-    def emigo(self, filename, prompt):
-        project_path = get_project_path(filename)
-        if isinstance(project_path, str):
-            self.emigo_project(project_path, prompt)
-        else:
-            print("EMIGO ERROR: parse project path of '{}' failed".format(filename))
+    # Removed emigo(filename, prompt) as entry point is now emigo_session
 
-    def emigo_project(self, project_path, prompt):
-        eval_in_emacs("emigo-create-ai-window", project_path)
-
+    def emigo_session(self, session_path, prompt):
+        """Handles a prompt for a specific session path."""
+        print(f"Starting session with path: {session_path}", file=sys.stderr)
         # First print the prompt to buffer
-        eval_in_emacs("emigo-flush-ai-buffer", project_path, "\n\n{}\n\n".format(prompt), "user")
+        eval_in_emacs("emigo-flush-buffer", session_path, "\n\nUser:\n{}\n\n".format(prompt), "user")
 
         # --- Add mentioned files to context ---
-        mentioned_files = self._extract_and_validate_mentions(project_path, prompt)
-        self.add_files_to_context(project_path, mentioned_files)
-        # The current_chat_files list is managed internally now by add_files_to_context
-        # and retrieved within the interaction loop.
+        # Use session_path for validation
+        mentioned_files = self._extract_and_validate_mentions(session_path, prompt)
+        if mentioned_files:
+            print(f"Found file mentions in prompt: {mentioned_files}", file=sys.stderr)
         # --- End Add mentioned files ---
 
-        if project_path in self.llm_client_dict:
+        if session_path in self.llm_client_dict:
             # Subsequent message: Update history and send
-            # Pass only project_path and prompt. Chat files are managed internally.
-            thread = threading.Thread(target=lambda: self.send_llm_message(project_path, prompt))
+            thread = threading.Thread(target=lambda: self.send_llm_message(session_path, prompt))
             thread.start()
             self.thread_queue.append(thread)
         else:
             # First message: Start client and send
-            # Pass only project_path and prompt. Chat files are managed internally.
-            thread = threading.Thread(target=lambda: self.start_llm_client(project_path, prompt))
+            thread = threading.Thread(target=lambda: self.start_llm_client(session_path, prompt))
             thread.start()
             self.thread_queue.append(thread)
 
-    def _extract_and_validate_mentions(self, project_path, text):
-        """Extracts @file mentions and validates they exist."""
-        validated_files = []
+    def _extract_and_validate_mentions(self, session_path, text):
+        """Extracts @file mentions and validates they exist relative to session_path."""
+        # Validate session_path first
+        if not session_path or not os.path.isdir(session_path):
+            print(f"ERROR: Invalid session path: {session_path}", file=sys.stderr)
+            return []
+
         pattern = r'@(\S+)' # Find @ followed by non-whitespace characters
         matches = re.findall(pattern, text)
-        if matches:
-            # print(f"Found potential @-mentions: {matches}", file=sys.stderr) # Optional debug
-            for potential_file in matches:
-                # Strip trailing punctuation that might be attached
-                potential_file = potential_file.rstrip('.,;:!?')
-                # Basic check: does it look like a path? (contains / or .)
-                # More robust checks could be added if needed.
-                if '/' in potential_file or '.' in potential_file:
-                     # Store the relative path as used in the mention
-                     validated_files.append(potential_file)
-                # else: # Optional debug for non-path-like mentions
-                #     print(f"  Ignoring mention '{potential_file}': Does not look like a file path.", file=sys.stderr)
-        return validated_files
 
-    def _parse_llm_for_file_requests(self, project_path, response_text):
+        # Use add_files_to_context to handle validation and adding
+        return self.add_files_to_context(session_path, matches)
+
+    def _parse_llm_for_file_requests(self, session_path, response_text):
         """
-        Parses the LLM response to check if it's requesting files to be added.
-        Returns a list of requested file paths if found, otherwise None.
+        Parses the LLM response for file requests.
+        Returns a list of file paths if found, otherwise None.
+        Let add_files_to_context handle validation.
         """
         # Look for the specific action phrase and file list structure
         action_marker = "Action: add_files_to_context"
@@ -168,14 +158,7 @@ class Emigo:
                 for line in files_section.strip().splitlines():
                     file_path = line.strip()
                     if file_path:
-                        # Basic validation: check if it's within the project
-                        abs_path = os.path.abspath(os.path.join(project_path, file_path))
-                        if os.path.commonpath([project_path, abs_path]) == project_path and os.path.isfile(abs_path):
-                             requested_files.append(file_path)
-                        else:
-                             print(f"Warning: LLM requested invalid or non-existent file: {file_path}", file=sys.stderr)
-                             # Optionally inform the user via Emacs message
-                             # eval_in_emacs("message", f"Emigo: LLM requested invalid file '{file_path}', ignoring.")
+                        requested_files.append(file_path)
 
                 if requested_files:
                     return requested_files
@@ -185,11 +168,13 @@ class Emigo:
             except Exception as e:
                 print(f"Error parsing LLM file request: {e}", file=sys.stderr)
 
-        return None # No valid file request found
+        return None # No file request found
 
-    def _execute_llm_interaction_loop(self, project_path, client, initial_user_prompt=None):
+    def _execute_llm_interaction_loop(self, session_path, client, initial_user_prompt=None):
         """
-        Handles the core interaction loop with the LLM, including automatic file adding.
+        Handles the core interaction loop for a session, including automatic file adding.
+
+        Uses session_path for both context tracking and file operations.
 
         This method implements a key innovation that allows the LLM to request additional
         files during a single user interaction. The flow is:
@@ -210,33 +195,34 @@ class Emigo:
         the request and final response.
 
         Args:
-            project_path: Root directory of current project
-            client: LLMClient instance for this project
-            initial_user_prompt: The original user message that started this interaction
+            session_path: Identifier for the current session context.
+            client: LLMClient instance for this session.
+            initial_user_prompt: The original user message that started this interaction.
         """
         verbose = True # Or get from config/client
         no_shell = True # Or get from config/client
         map_tokens = 4096 # Or get from config/client
         tokenizer = "cl100k_base" # Or get from config/client
         max_retries = 3 # Limit retries for adding files to prevent infinite loops
-        current_user_prompt = initial_user_prompt # Keep track of the prompt for this interaction
+        current_user_prompt = initial_user_prompt # Keep track of the prompt for this interaction loop
 
         for attempt in range(max_retries):
-            # Get the current list of chat files for this iteration
-            chat_files = self.project_chat_files.get(project_path, [])
+            # Get the current list of chat files for this session
+            chat_files = self.chat_files.get(session_path, [])
 
-            print(f"\n--- LLM Interaction Loop (Attempt {attempt + 1}/{max_retries}) ---", file=sys.stderr)
+            print(f"\n--- LLM Interaction Loop (Session: {os.path.basename(session_path)}, Attempt {attempt + 1}/{max_retries}) ---", file=sys.stderr)
+            print(f"Session Path: {session_path}", file=sys.stderr)
             print(f"Using chat files: {chat_files}", file=sys.stderr)
 
             # --- 1. Build Prompt ---
             try:
-                # Pass the specific user prompt for this turn to the builder.
-                # The history passed to build_prompt_messages does NOT include this prompt yet.
+                # PromptBuilder needs the actual project root for repo mapping and file access.
+                # History comes from the client associated with the session_path.
                 builder = PromptBuilder(
-                    root_dir=project_path,
-                    user_message=current_user_prompt, # Use the prompt for this specific interaction
-                    chat_files=chat_files, # Use the list fetched for this iteration
-                    read_only_files=[], # Load if needed
+                    root_dir=session_path, # Use session_path as root
+                    user_message=current_user_prompt,
+                    chat_files=chat_files,
+                    read_only_files=[], # TODO: Implement if needed
                     map_tokens=map_tokens,
                     tokenizer=tokenizer,
                     verbose=verbose,
@@ -245,62 +231,63 @@ class Emigo:
                 messages = builder.build_prompt_messages(current_history=client.get_history())
 
             except Exception as e:
-                print(f"Error building prompt in loop: {e}", file=sys.stderr)
-                eval_in_emacs("emigo-flush-ai-buffer", project_path, f"[Error building prompt: {e}]", "error")
+                print(f"Error building prompt in loop (Session: {os.path.basename(session_path)}): {e}", file=sys.stderr)
+                eval_in_emacs("emigo-flush-buffer", session_path, f"[Error building prompt: {e}]", "error")
                 return # Exit loop on build error
 
             # --- 2. Send to LLM (Streaming) ---
             full_response = ""
-            eval_in_emacs("emigo-flush-ai-buffer", project_path, "\nAssistant:\n", "llm") # Add header before streaming
+            # Flush to the correct session buffer
+            eval_in_emacs("emigo-flush-buffer", session_path, "\nAssistant:\n", "llm")
             try:
                 response_stream = client.send(messages, stream=True)
                 for chunk in response_stream:
-                    eval_in_emacs("emigo-flush-ai-buffer", project_path, chunk, "llm")
+                    # Flush chunks to the correct session buffer
+                    eval_in_emacs("emigo-flush-buffer", session_path, chunk, "llm")
                     full_response += chunk
-                # print() # Ensure a newline in terminal if needed, Emacs buffer handles it
+                # print() # Ensure a newline in terminal if needed
 
             except Exception as e:
-                print(f"\nError during LLM communication in loop: {e}", file=sys.stderr)
+                print(f"\nError during LLM communication in loop (Session: {os.path.basename(session_path)}): {e}", file=sys.stderr)
                 error_message = f"[Error during LLM communication: {e}]"
-                eval_in_emacs("emigo-flush-ai-buffer", project_path, error_message, "error")
+                # Flush error to the correct session buffer
+                eval_in_emacs("emigo-flush-buffer", session_path, error_message, "error")
                 # Add the user prompt and error message to history before returning
-                if initial_user_prompt:
-                    client.append_history({"role": "user", "content": initial_user_prompt})
+                if current_user_prompt: # Use the prompt for this loop iteration
+                    client.append_history({"role": "user", "content": current_user_prompt})
                 client.append_history({"role": "assistant", "content": error_message})
                 return # Exit loop on communication error
 
-            # --- 3. Parse Full Response (Post-Streaming) for File Requests ---
-            requested_files = self._parse_llm_for_file_requests(project_path, full_response)
+            # --- 3. Parse Full Response for File Requests ---
+            # Validate requested files against the session_path
+            requested_files = self._parse_llm_for_file_requests(session_path, full_response)
 
             if requested_files:
-                print(f"LLM requested files: {requested_files}", file=sys.stderr)
-                # Use the new function to add files and handle messaging/state
-                newly_added = self.add_files_to_context(project_path, requested_files)
+                print(f"LLM requested files for session {os.path.basename(session_path)}: {requested_files}", file=sys.stderr)
+                # Add files to the specific session_path context
+                newly_added = self.add_files_to_context(session_path, requested_files)
 
                 if newly_added:
-                    # Files were successfully added, continue the loop
-                    current_user_prompt = initial_user_prompt # Keep the original prompt
+                    # Files were successfully added, continue the loop with the *same* user prompt
+                    # current_user_prompt remains initial_user_prompt
+                    print(f"Added {newly_added}, continuing loop for session {os.path.basename(session_path)}.", file=sys.stderr)
                     continue
                 else:
-                    # LLM requested files, but they were already in context.
-                    # This might indicate a loop or misunderstanding. Break and show response.
-                    print("Warning: LLM requested files that are already in context. Breaking loop.", file=sys.stderr)
-                    # LLM requested files, but they were already in context.
+                    # LLM requested files, but they were already in context or invalid.
                     # This might indicate a loop or misunderstanding.
-                    # Add the assistant's response (which requested files again) to history.
+                    # Add the assistant's response (which requested files again/invalid files) to history.
                     client.append_history({"role": "assistant", "content": full_response})
                     # The response was already streamed. Break the loop.
-                    print("Warning: LLM requested files that are already in context. Breaking loop.", file=sys.stderr)
-                    break
+                    print(f"Warning: LLM requested files already in context or invalid for session {os.path.basename(session_path)}. Breaking loop.", file=sys.stderr)
+                    break # Exit loop
 
             else:
                 # No file request detected, this is the final response for this interaction.
-                print("LLM did not request files. Finalizing interaction.", file=sys.stderr)
+                print(f"LLM did not request files for session {os.path.basename(session_path)}. Finalizing interaction.", file=sys.stderr)
 
-                # Add the original user prompt that started this interaction to history
-                if initial_user_prompt: # Ensure we have the initial prompt
-                     client.append_history({"role": "user", "content": initial_user_prompt})
-                     # We don't need to clear initial_user_prompt as the loop is ending
+                # Add the user prompt for this interaction to history
+                if current_user_prompt:
+                     client.append_history({"role": "user", "content": current_user_prompt})
 
                 # Add the final assistant response (already streamed) to history
                 client.append_history({"role": "assistant", "content": full_response})
@@ -310,99 +297,104 @@ class Emigo:
 
         else:
             # Loop finished due to max_retries
-            print(f"Error: Exceeded max retries ({max_retries}) for adding files.", file=sys.stderr)
+            print(f"Error: Exceeded max retries ({max_retries}) for adding files in session {os.path.basename(session_path)}.", file=sys.stderr)
             error_message = f"[Error: Exceeded max retries ({max_retries}) for adding files. Check LLM response.]"
-            eval_in_emacs("emigo-flush-ai-buffer", project_path, error_message, "error")
+            eval_in_emacs("emigo-flush-buffer", session_path, error_message, "error")
             # The last response (which likely requested files again) was already streamed.
-            # Add the user prompt (if available) and the final assistant response to history.
-            if initial_user_prompt:
-                 client.append_history({"role": "user", "content": initial_user_prompt})
+            # Add the user prompt and the final assistant response to history.
+            if current_user_prompt:
+                 client.append_history({"role": "user", "content": current_user_prompt})
             if full_response: # Add the last assistant response before giving up
                  client.append_history({"role": "assistant", "content": full_response})
 
 
-    def send_llm_message(self, project_path, prompt):
-        """Sends a subsequent message, triggering the interaction loop."""
-        if project_path in self.llm_client_dict:
-            client = self.llm_client_dict[project_path]
-
-            # Call the interaction loop. It will fetch the current context internally.
-            self._execute_llm_interaction_loop(project_path, client, initial_user_prompt=prompt)
+    def send_llm_message(self, session_path, prompt):
+        """Sends a subsequent message for a session, triggering the interaction loop."""
+        if session_path in self.llm_client_dict:
+            client = self.llm_client_dict[session_path]
+            # Call the interaction loop. It will fetch context internally using session_path.
+            self._execute_llm_interaction_loop(session_path, client, initial_user_prompt=prompt)
         else:
-            print(f"EMIGO ERROR: LLM client not found for project path {project_path} in send_llm_message.")
+            print(f"EMIGO ERROR: LLM client not found for session path {session_path} in send_llm_message.")
+            eval_in_emacs("emigo-flush-buffer", session_path, "[Internal Error: LLM Client not found]", "error")
 
-    def add_files_to_context(self, project_path, files_to_add):
+
+    def add_files_to_context(self, session_path, files_to_add):
         """
-        Adds a list of files to the chat context for a given project.
+        Adds a list of files to the chat context for a given session.
 
-        Handles validation (existence, within project), prevents duplicates,
-        updates self.project_chat_files, and notifies Emacs.
+        Handles validation against session_path, prevents duplicates,
+        updates self.chat_files[session_path], and notifies Emacs.
 
         Args:
-            project_path: The absolute path to the project root.
+            session_path: The identifier and root path for the session context.
             files_to_add: A list of relative file paths to potentially add.
 
         Returns:
-            A list of the files that were newly added to the context.
+            A list of the relative file paths that were newly added to the context.
         """
         if not files_to_add:
             return []
 
-        # Ensure the project list exists
-        chat_files_list = self.project_chat_files.setdefault(project_path, [])
-        # Use a set for efficient checking of existing files
-        chat_files_set = set(chat_files_list)
+        # Ensure the session list exists in chat_files
+        chat_files_list = self.chat_files.setdefault(session_path, [])
+        chat_files_set = set(chat_files_list) # Use set for efficient checking
         newly_added = []
 
         for file_rel_path in files_to_add:
             if file_rel_path in chat_files_set:
+                # print(f"Debug: File '{file_rel_path}' already in context for session {os.path.basename(session_path)}.", file=sys.stderr)
                 continue # Skip duplicates
 
-            abs_path = os.path.abspath(os.path.join(project_path, file_rel_path))
+            # Validate against session_path
+            abs_path = os.path.abspath(os.path.join(session_path, file_rel_path))
 
-            # Validate: exists, is a file, and is within the project directory
-            if os.path.commonpath([project_path, abs_path]) == project_path and os.path.isfile(abs_path):
-                chat_files_list.append(file_rel_path) # Add to the list
-                chat_files_set.add(file_rel_path)   # Add to the set for future checks
+            if os.path.isfile(abs_path):
+                chat_files_list.append(file_rel_path) # Add relative path to the list
+                chat_files_set.add(file_rel_path)   # Add relative path to the set
                 newly_added.append(file_rel_path)
-            else:
-                # Optionally log or notify about invalid files
-                print(f"Warning: Ignoring request to add invalid or non-existent file: {file_rel_path}", file=sys.stderr)
-                # eval_in_emacs("message", f"[Emigo] Ignoring invalid file: {file_rel_path}")
 
         if newly_added:
             added_files_str = ', '.join(newly_added)
-            message_emacs(f"Added files to context: {added_files_str}")
-            print(f"Added files to context: {added_files_str}", file=sys.stderr)
+            message_emacs(f"Added files to context for session {os.path.basename(session_path)}: {added_files_str}")
+            print(f"Added files to context for session {os.path.basename(session_path)}: {added_files_str}", file=sys.stderr)
+            # Update the main chat_files dictionary
+            self.chat_files[session_path] = chat_files_list
 
-        return newly_added
+        return newly_added # Return list of newly added relative paths
 
-    def start_llm_client(self, project_path, prompt):
-        """Starts a new LLM client and triggers the interaction loop."""
+    def start_llm_client(self, session_path, prompt):
+        """Starts a new LLM client for a session and triggers the interaction loop."""
         verbose = True # Or get from config
         # --- Get Model Config ---
-        [model, base_url, api_key] = get_emacs_vars(["emigo-model", "emigo-base-url", "emigo-api-key"])
+        # Use get_emacs_vars which handles boolean conversion correctly
+        vars_result = get_emacs_vars(["emigo-model", "emigo-base-url", "emigo-api-key"])
+        if not vars_result or len(vars_result) < 3:
+             message_emacs("Error retrieving Emacs variables.")
+             return
+        model, base_url, api_key = vars_result
+
         if not model: # Check only essential model name
             message_emacs("Please set emigo-model before calling emigo.")
             return
 
         # --- Initialize Client ---
+        print(f"Starting LLM Client for session: {os.path.basename(session_path)} (Path: {session_path})", file=sys.stderr)
         client = LLMClient(
             model_name=model,
             api_key=api_key if api_key else None, # Pass None if empty string
-            base_url=base_url if base_url else None, # Pass None if empty string
+            base_url=base_url if base_url else None,
             verbose=verbose,
         )
-        self.llm_client_dict[project_path] = client
+        self.llm_client_dict[session_path] = client
 
-        # --- Initialize chat files (if any were mentioned in the first prompt) ---
-        # Note: The initial prompt's mentions were already added in emigo_project
-        # before this function was called. We don't need to pass chat_files here.
-        # self.project_chat_files.setdefault(project_path, []) # Ensure list exists
+        # --- Initialize chat files for this session ---
+        # Mentions from the first prompt were already added by emigo_session calling add_files_to_context
+        self.chat_files.setdefault(session_path, []) # Ensure list exists
 
         # --- Start Interaction Loop ---
-        # Call the interaction loop. It will fetch the current context internally.
-        self._execute_llm_interaction_loop(project_path, client, initial_user_prompt=prompt)
+        # Pass session_path to the loop.
+        self._execute_llm_interaction_loop(session_path, client, initial_user_prompt=prompt)
 
 
     def cleanup(self):

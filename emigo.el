@@ -9,7 +9,7 @@
 ;; Copyright (C) 2025, Emigo, all rights reserved.
 ;; Created: 2025-03-29
 ;; Version: 0.5
-;; Last-Updated: Sat Mar 29 23:27:04 2025 (-0400)
+;; Last-Updated: Sun Mar 30 02:45:57 2025 (-0400)
 ;;           By: Mingde (Matthew) Zeng
 ;; Package-Requires: ((emacs "26.1") (transient "0.3.0") (compat "30.0.2.0"))
 ;; Keywords: ai emacs llm aider ai-pair-programming tools
@@ -29,15 +29,12 @@
 (require 'map)
 (require 'seq)
 (require 'subr-x)
+(require 'vc-git)
 (require 'emigo-epc)
 
 (defgroup emigo nil
   "Emigo group."
-  :group 'applications)
-
-(defcustom emigo-get-project-path-by-filepath nil
-  "Default use command 'git rev-parse --show-toplevel' get project path,
-you can customize `emigo-get-project-path-by-filepath' to return project path by give file path.")
+  :group 'emigo)
 
 (defcustom emigo-model ""
   "Default AI model.")
@@ -67,31 +64,14 @@ you can customize `emigo-get-project-path-by-filepath' to return project path by
     (setq emigo-server
           (emigo-epc-server-start
            (lambda (mngr)
-             (let ((mngr mngr))
-               (emigo-epc-define-method mngr 'eval-in-emacs 'emigo--eval-in-emacs-func)
-               (emigo-epc-define-method mngr 'get-emacs-var 'emigo--get-emacs-var-func)
-               (emigo-epc-define-method mngr 'get-emacs-vars 'emigo--get-emacs-vars-func)
-               (emigo-epc-define-method mngr 'get-user-emacs-directory 'emigo--user-emacs-directory)
-               (emigo-epc-define-method mngr 'get-project-path 'emigo--get-project-path-func)
-               ))))
+             (emigo-epc-define-method mngr 'eval-in-emacs 'emigo--eval-in-emacs-func)
+             (emigo-epc-define-method mngr 'get-emacs-var 'emigo--get-emacs-var-func)
+             (emigo-epc-define-method mngr 'get-emacs-vars 'emigo--get-emacs-vars-func)
+             (emigo-epc-define-method mngr 'get-user-emacs-directory 'emigo--user-emacs-directory))))
     (if emigo-server
         (setq emigo-server-port (process-contact emigo-server :service))
       (error "[Emigo] emigo-server failed to start")))
   emigo-server)
-
-(defun emigo--get-project-path-func (filename)
-  "Get project root path, search order:
-
-1. Follow the rule of `emigo-get-project-path-by-filepath'
-2. Search up `.dir-locals.el'
-3. Search up `.git'"
-  (if emigo-get-project-path-by-filepath
-      ;; Fetch project root path by `emigo-get-project-path-by-filepath' if it set by user.
-      (funcall emigo-get-project-path-by-filepath filename)
-    ;; Otherwise try to search up `.dir-locals.el' file
-    (let* ((result (dir-locals-find-file filename))
-           (dir (if (consp result) (car result) result)))
-      (when dir (directory-file-name dir)))))
 
 (defun emigo--eval-in-emacs-func (sexp-string)
   (eval (read sexp-string))
@@ -109,7 +89,71 @@ you can customize `emigo-get-project-path-by-filepath' to return project path by
 (defun emigo--get-emacs-vars-func (&rest vars)
   (mapcar #'emigo--get-emacs-var-func vars))
 
-(defvar emigo-project-buffers nil)
+(defun emigo--is-emigo-buffer-p (&optional buffer)
+  "Return non-nil if BUFFER (defaults to current) is an Emigo buffer."
+  (with-current-buffer (or buffer (current-buffer))
+    (string-match-p "^\\*emigo:.*\\*$" (buffer-name))))
+
+(defun emigo-project-root ()
+  "Get the project root using VC-git, or fallback to file directory.
+This function tries multiple methods to determine the project root."
+  (or (vc-git-root default-directory)
+      (when buffer-file-name
+        (file-name-directory buffer-file-name))
+      default-directory))
+
+(defun emigo-select-buffer-name ()
+  "Select an existing emigo session buffer.
+If there is only one emigo buffer, return its name.
+If there are multiple, prompt to select one interactively.
+Returns nil if no emigo buffers exist.
+This is used when you want to target an existing session."
+  (let* ((buffers (seq-filter #'emigo--is-emigo-buffer-p (buffer-list)))
+         (buffer-names (mapcar #'buffer-name buffers)))
+    (pcase buffers
+      (`() nil)
+      (`(,name) (buffer-name name))
+      (_ (completing-read "Select emigo session: " buffer-names nil t)))))
+
+(defun emigo-get-buffer-name (&optional use-existing session-path)
+  "Generate or find the emigo buffer name based on the session path.
+If USE-EXISTING is non-nil, try to find an existing buffer.
+SESSION-PATH defaults to the path determined by `emigo-project-root` or `default-directory`.
+Searches parent directories for existing sessions."
+  (let* ((current-session-path (file-truename (or session-path
+                                                   (if current-prefix-arg ;; Check prefix arg for context
+                                                       default-directory
+                                                     (emigo-project-root)))))
+         (target-buffer-name (format "*emigo:%s*" current-session-path)))
+    (if use-existing
+        (or (and (get-buffer target-buffer-name) target-buffer-name) ;; Exact match first
+            ;; Search parent directories for existing sessions
+            (let* ((emigo-buffers (seq-filter #'emigo--is-emigo-buffer-p (buffer-list)))
+                   (buffer-session-paths
+                      (mapcar (lambda (buf)
+                                (when (string-match "^\\*emigo:\\(.*?\\)\\*$" (buffer-name buf))
+                                  (match-string 1 (buffer-name buf))))
+                              emigo-buffers))
+                     ;; Find closest parent directory that has an emigo session
+                     (closest-parent-session-path
+                      (car (sort (seq-filter (lambda (path)
+                                               (and path
+                                                    (file-in-directory-p current-session-path path)
+                                                  (file-exists-p path)))
+                                           buffer-session-paths)
+                               (lambda (a b) (> (length a) (length b))))))) ;; Sort by length (deepest first)
+              (when closest-parent-session-path
+                (format "*emigo:%s*" closest-parent-session-path)))
+            (emigo-select-buffer-name)) ;; Fallback to interactive selection if no match found
+      ;; Not using existing, just return the calculated name
+      target-buffer-name)))
+
+;; --- End new functions ---
+
+(defvar emigo-project-buffers nil) ;; Keep track of buffer objects
+(defvar-local emigo-session-path nil ;; Buffer-local session path
+  "The session path (project root or current dir) associated with this Emigo buffer.")
+;; Removed emigo-project-root buffer-local variable
 
 (defvar emigo-epc-process nil)
 
@@ -142,21 +186,29 @@ Then Emigo will start by gdb, please send new issue with `*emigo*' buffer conten
   "Get lang server with project path, file path or file extension."
   (expand-file-name user-emacs-directory))
 
+(defun emigo--ensure-session-path (session-path)
+  "Ensure SESSION-PATH is valid, erroring if nil."
+  (unless session-path
+    (error "[Emigo] Could not determine session path"))
+  session-path)
+
 (defun emigo-call-async (method &rest args)
   "Call Python EPC function METHOD and ARGS asynchronously."
   (if (emigo-epc-live-p emigo-epc-process)
       (emigo-deferred-chain
-        (emigo-epc-call-deferred emigo-epc-process (read method) args))
+       (emigo-epc-call-deferred emigo-epc-process (read method) args))
+    ;; If process not live, queue the first call details
     (setq emigo-first-call-method method)
     (setq emigo-first-call-args args)
-    ))
+    (message "[Emigo] Process not started, queuing call: %s" method)
+    (emigo-start-process)))
 
 (defun emigo-call--sync (method &rest args)
   "Call Python EPC function METHOD and ARGS synchronously."
   (if (emigo-epc-live-p emigo-epc-process)
       (emigo-epc-call-sync emigo-epc-process (read method) args)
-    (message "emigo not started.")
-    ))
+    (message "[Emigo] Process not started.")
+    nil))
 
 (defvar emigo-first-call-method nil)
 (defvar emigo-first-call-args nil)
@@ -216,8 +268,7 @@ Then Emigo will start by gdb, please send new issue with `*emigo*' buffer conten
   (run-hooks 'emigo-stop-process-hook)
 
   ;; Kill process after kill buffer, make application can save session data.
-  (emigo--kill-python-process)
-  )
+  (emigo--kill-python-process))
 
 (add-hook 'kill-emacs-hook #'emigo-kill-process)
 
@@ -250,8 +301,8 @@ Then Emigo will start by gdb, please send new issue with `*emigo*' buffer conten
              emigo-first-call-args)
     (emigo-deferred-chain
       (emigo-epc-call-deferred emigo-epc-process
-                               (read emigo-first-call-method)
-                               emigo-first-call-args)
+                               (read emigo-first-call-method) ;; Method name
+                               emigo-first-call-args) ;; Args list (already includes session_path)
       (setq emigo-first-call-method nil)
       (setq emigo-first-call-args nil)
       )))
@@ -264,12 +315,39 @@ Then Emigo will start by gdb, please send new issue with `*emigo*' buffer conten
     (insert-file-contents filepath)
     (string-trim (buffer-string))))
 
-(defun emigo (prompt)
-  (interactive "sEmigo: ")
-  (setq prompt (substring-no-properties prompt))
-  (if (boundp 'emigo--project-path)
-      (emigo-call-async "emigo_project" emigo--project-path prompt)
-    (emigo-call-async "emigo" (buffer-file-name) prompt)))
+;; Define the main entry point command
+;;;###autoload
+(defun emigo ()
+  "Start or switch to an Emigo session.
+With no prefix arg, uses the project root (e.g., Git root) as the session path.
+With a prefix arg (C-u), uses the current directory (`default-directory`)
+as the session path."
+  (interactive)
+  (let* ((session-path (if current-prefix-arg
+                           (file-truename default-directory)
+                         (file-truename (emigo-project-root))))
+         (buffer-name (emigo-get-buffer-name nil session-path))
+         (buffer (get-buffer-create buffer-name))
+         (prompt (read-string (format "Emigo Prompt (%s): "
+                                     (if current-prefix-arg default-directory "project root")))))
+
+    ;; Ensure EPC process is running or starting
+    (unless (emigo-epc-live-p emigo-epc-process)
+      (emigo-start-process))
+
+    ;; Set buffer-local session path variable
+    (with-current-buffer buffer
+      (setq-local emigo-session-path session-path))
+
+    ;; Add buffer to tracked list
+    (add-to-list 'emigo-project-buffers buffer t) ;; Use t to avoid duplicates
+
+    ;; Switch to or display the buffer
+    (emigo-create-window buffer) ;; Use the specific buffer
+
+    ;; Send prompt if provided
+    (when (and prompt (not (string-empty-p prompt)))
+      (emigo-call-async "emigo_session" session-path prompt))))
 
 (defcustom emigo-dedicated-window-width 50
   "The height of `emigo' dedicated window."
@@ -342,67 +420,31 @@ Otherwise return nil."
   (select-window emigo-dedicated-window)
   (set-window-dedicated-p (selected-window) t))
 
-(defun emigo-get-ai-buffer (project-path)
-  (let ((buffer (get-buffer-create (format " *emigo %s*" project-path))))
-    (add-to-list 'emigo-project-buffers buffer)
+(defun emigo-create-window (buffer)
+  "Display BUFFER in the dedicated Emigo window."
+  (unless (bufferp buffer)
+    (error "[Emigo] Invalid buffer provided to emigo-create-ai-window: %s" buffer))
+  (setq emigo-dedicated-buffer buffer)
+  (unless (emigo-window-exist-p emigo-dedicated-window)
+    (setq emigo-dedicated-window
+          (display-buffer buffer ;; Display the specific buffer
+                          `(display-buffer-in-side-window
+                            (side . right)
+                            (window-width . ,emigo-dedicated-window-width)))))
+  (select-window emigo-dedicated-window)
+  (set-window-buffer emigo-dedicated-window emigo-dedicated-buffer) ;; Ensure correct buffer is shown
+  (set-window-dedicated-p (selected-window) t))
+
+(defun emigo-flush-buffer (session-path content role)
+  "Flush CONTENT to the Emigo buffer associated with SESSION-PATH."
+  (let ((buffer-name (emigo-get-buffer-name nil session-path))
+        (buffer (get-buffer (emigo-get-buffer-name t session-path)))) ;; Find existing buffer
+    (unless buffer
+      (warn "[Emigo] Could not find buffer for session %s to flush content." session-path)
+      (cl-return-from emigo-flush-buffer))
+
     (with-current-buffer buffer
-      (emigo-update-header-line project-path)
-
-      (setq-local left-margin-width 1)
-      (setq-local right-margin-width 1)
-
-      (setq-local emigo--project-path project-path))
-    buffer))
-
-(defun emigo-update-header-line (project-path)
-  (setq header-line-format (concat
-                            (propertize (format " %s" (emigo-format-project-path project-path)) 'face font-lock-constant-face))))
-
-(defun emigo-shrink-dir-name (input-string)
-  (let* ((words (split-string input-string "-"))
-         (abbreviated-words (mapcar (lambda (word) (substring word 0 (min 1 (length word)))) words)))
-    (mapconcat 'identity abbreviated-words "-")))
-
-(defun emigo-format-project-path (project-path)
-  (let* ((file-path (split-string project-path "/" t))
-         (full-num 2)
-         (show-name nil)
-         shown-path)
-    (setq show-path
-          (if buffer-file-name
-              (if show-name file-path (butlast file-path))
-            file-path))
-    (setq show-path (nthcdr (- (length show-path)
-                               (if buffer-file-name
-                                   (if show-name (1+ full-num) full-num)
-                                 (1+ full-num)))
-                            show-path))
-    ;; Shrink parent directory name to save minibuffer space.
-    (setq show-path
-          (append (mapcar #'emigo-shrink-dir-name (butlast show-path))
-                  (last show-path)))
-    ;; Join paths.
-    (setq show-path (mapconcat #'identity show-path "/"))
-    show-path))
-
-(defun emigo-create-ai-window (project-path)
-  (save-excursion
-    (let ((ai-buffer (emigo-get-ai-buffer project-path)))
-      (setq emigo-dedicated-buffer ai-buffer)
-      (unless (emigo-window-exist-p emigo-dedicated-window)
-        (setq emigo-dedicated-window
-              (display-buffer (current-buffer)
-                              `(display-buffer-in-side-window
-                                (side . right)
-                                (window-width . ,emigo-dedicated-window-width)))))
-      (select-window emigo-dedicated-window)
-      (set-window-buffer emigo-dedicated-window emigo-dedicated-buffer)
-      (set-window-dedicated-p (selected-window) t))))
-
-(defun emigo-flush-ai-buffer (project-path content role)
-  (save-excursion
-    (let ((ai-buffer (emigo-get-ai-buffer project-path)))
-      (with-current-buffer ai-buffer
+      (let ((inhibit-read-only t)) ;; Allow modification even if buffer is read-only
         (goto-char (point-max))
         (if (equal role "user")
             (insert (propertize content 'face font-lock-keyword-face))
@@ -453,28 +495,27 @@ This advice can make `other-window' skip `emigo' dedicated window."
     (emigo-start-process)            ; Attempt to start if not running
     (error "Emigo process was not running, please try again shortly."))
 
-  (let* ((current-buffer-file (buffer-file-name (current-buffer)))
-         (project-path (cond
-                        ((boundp 'emigo--project-path) emigo--project-path) ; Use buffer-local if available
-                        (current-buffer-file (emigo--get-project-path-func current-buffer-file))
-                        (t (error "[Emigo] Cannot determine project path"))))
-         (chat-files (emigo-call--sync "get_chat_files" project-path))
-         (file-to-remove nil))
+  (let ((buffer (emigo-get-buffer-name t)))
+    (unless buffer
+      (error "[Emigo] No Emigo buffer found"))
 
-    (unless project-path
-      (error "[Emigo] Could not determine project path"))
+    (with-current-buffer buffer
+      (unless emigo-session-path
+        (error "[Emigo] Could not determine session path from buffer"))
 
-    (unless chat-files
-      (message "[Emigo] No files currently in chat context for %s" project-path)
-      (cl-return-from emigo-remove-file-from-context))
+      (let ((chat-files (emigo-call--sync "get_chat_files" emigo-session-path))
+            (file-to-remove nil))
 
-    (setq file-to-remove (completing-read "Remove file from context: " chat-files nil t))
+        (unless chat-files
+          (message "[Emigo] No files currently in chat context for session: %s" emigo-session-path)
+          (cl-return-from emigo-remove-file-from-context))
 
-    (when (and file-to-remove (member file-to-remove chat-files))
-      (emigo-call-async "remove_file_from_context" project-path file-to-remove)
-      ;; Message will be sent from Python side upon successful removal
-      )
-    ))
+        (setq file-to-remove (completing-read "Remove file from context: " chat-files nil t))
+
+        (when (and file-to-remove (member file-to-remove chat-files))
+          (emigo-call-async emigo-session-path "remove_file_from_context" file-to-remove)
+          ;; Message will be sent from Python side upon successful removal
+          )))))
 
 (defun emigo-list-context-files ()
   "List the files currently in the Emigo chat context for the current project."
@@ -484,24 +525,20 @@ This advice can make `other-window' skip `emigo' dedicated window."
     (emigo-start-process)            ; Attempt to start if not running
     (error "Emigo process was not running, please try again shortly."))
 
-  (let* ((current-buffer-file (buffer-file-name (current-buffer)))
-         (project-path (cond
-                        ((boundp 'emigo--project-path) emigo--project-path) ; Use buffer-local if available
-                        (current-buffer-file (emigo--get-project-path-func current-buffer-file))
-                        (t (error "[Emigo] Cannot determine project path"))))
-         (chat-files nil))
+  (let ((buffer (emigo-get-buffer-name t)))
+    (unless buffer
+      (error "[Emigo] No Emigo buffer found"))
 
-    (unless project-path
-      (error "[Emigo] Could not determine project path"))
+    (with-current-buffer buffer
+      (unless emigo-session-path
+        (error "[Emigo] Could not determine session path from buffer"))
 
-    (setq chat-files (emigo-call--sync "get_chat_files" project-path))
-
-    (if chat-files
-        (message "[Emigo] Files added in %s: %s"
-                 project-path
-                 (mapconcat #'identity chat-files ", "))
-      (message "[Emigo] No files currently in chat context for %s" project-path))
-    ))
+      (let ((chat-files (emigo-call--sync "get_chat_files" emigo-session-path)))
+        (if chat-files
+            (message "[Emigo] Files added in session %s: %s"
+                     emigo-session-path
+                     (mapconcat #'identity chat-files ", "))
+          (message "[Emigo] No files currently in chat context for session: %s" emigo-session-path))))))
 
 (provide 'emigo)
 
