@@ -53,10 +53,6 @@ class Emigo:
         # self.server.logger = logger
 
         self.server.register_instance(self)  # register instance functions let elisp side call
-        # Register functions callable from Elisp. Note the first arg is implicitly session_path.
-        self.server.register_function(self.emigo_session)
-        self.server.register_function(self.get_chat_files)
-        self.server.register_function(self.remove_file_from_context)
 
         # Start EPC server with sub-thread, avoid block Qt main loop.
         self.server_thread = threading.Thread(target=self.server.serve_forever)
@@ -107,7 +103,11 @@ class Emigo:
         """Handles a prompt for a specific session path."""
         print(f"Starting session with path: {session_path}", file=sys.stderr)
         # First print the prompt to buffer
-        eval_in_emacs("emigo-flush-buffer", session_path, "\n\nUser:\n{}\n\n".format(prompt), "user")
+        if session_path in self.llm_client_dict:
+            prompt_title = "\n\nUser:\n{}\n"
+        else:
+            prompt_title = "\nUser:\n{}\n"
+        eval_in_emacs("emigo-flush-buffer", session_path, prompt_title.format(prompt), "user")
 
         # --- Add mentioned files to context ---
         # Use session_path for validation
