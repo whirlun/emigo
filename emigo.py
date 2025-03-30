@@ -112,31 +112,23 @@ class Emigo:
         # First print the prompt to buffer
         eval_in_emacs("emigo-flush-ai-buffer", project_path, "\n\n{}\n\n".format(prompt), "user")
 
-        # --- Manage Chat Files ---
-        if project_path not in self.project_chat_files:
-            self.project_chat_files[project_path] = [] # Initialize if new project
-
-        current_chat_files = self.project_chat_files[project_path]
-        mentioned_in_prompt = self._extract_and_validate_mentions(project_path, prompt)
-        newly_added_files = []
-        for fname in mentioned_in_prompt:
-            if fname not in current_chat_files:
-                current_chat_files.append(fname)
-                newly_added_files.append(fname)
-
-        if newly_added_files:
-             message_emacs(f"Added mentioned files to context: {', '.join(newly_added_files)}")
-        # --- End Manage Chat Files ---
-
+        # --- Add mentioned files to context ---
+        mentioned_files = self._extract_and_validate_mentions(project_path, prompt)
+        self.add_files_to_context(project_path, mentioned_files)
+        # The current_chat_files list is managed internally now by add_files_to_context
+        # and retrieved within the interaction loop.
+        # --- End Add mentioned files ---
 
         if project_path in self.llm_client_dict:
             # Subsequent message: Update history and send
-            thread = threading.Thread(target=lambda: self.send_llm_message(project_path, prompt, current_chat_files))
+            # Pass only project_path and prompt. Chat files are managed internally.
+            thread = threading.Thread(target=lambda: self.send_llm_message(project_path, prompt))
             thread.start()
             self.thread_queue.append(thread)
         else:
             # First message: Start client and send
-            thread = threading.Thread(target=lambda: self.start_llm_client(project_path, prompt, current_chat_files))
+            # Pass only project_path and prompt. Chat files are managed internally.
+            thread = threading.Thread(target=lambda: self.start_llm_client(project_path, prompt))
             thread.start()
             self.thread_queue.append(thread)
 
@@ -150,14 +142,13 @@ class Emigo:
             for potential_file in matches:
                 # Strip trailing punctuation that might be attached
                 potential_file = potential_file.rstrip('.,;:!?')
-                # Resolve relative to project_path
-                abs_path = os.path.abspath(os.path.join(project_path, potential_file))
-                # Check if it exists *within* the project dir and is a file
-                if os.path.commonpath([project_path, abs_path]) == project_path and os.path.isfile(abs_path):
-                    # Store the relative path as used in the mention
-                    validated_files.append(potential_file)
-                # else: # Optional debug
-                #     print(f"  Ignoring mention '{potential_file}': File not found or not a file at {abs_path}", file=sys.stderr)
+                # Basic check: does it look like a path? (contains / or .)
+                # More robust checks could be added if needed.
+                if '/' in potential_file or '.' in potential_file:
+                     # Store the relative path as used in the mention
+                     validated_files.append(potential_file)
+                # else: # Optional debug for non-path-like mentions
+                #     print(f"  Ignoring mention '{potential_file}': Does not look like a file path.", file=sys.stderr)
         return validated_files
 
     def _parse_llm_for_file_requests(self, project_path, response_text):
@@ -283,24 +274,12 @@ class Emigo:
 
             if requested_files:
                 print(f"LLM requested files: {requested_files}", file=sys.stderr)
-                newly_added_files = []
-                # Get the current list from the instance variable to modify it
-                chat_files = self.project_chat_files.setdefault(project_path, [])
-                current_chat_files_set = set(chat_files)
+                # Use the new function to add files and handle messaging/state
+                newly_added = self.add_files_to_context(project_path, requested_files)
 
-                for fname in requested_files:
-                    if fname not in current_chat_files_set:
-                        chat_files.append(fname) # Modify the list in place
-                        newly_added_files.append(fname)
-                        current_chat_files_set.add(fname) # Keep set updated
-
-                if newly_added_files:
-                    # self.project_chat_files[project_path] is already updated
-                    added_files_str = ', '.join(newly_added_files)
-                    message_emacs(f"LLM requested files. Added to context: {added_files_str}")
-                    print(f"Added files to context: {added_files_str}", file=sys.stderr)
-                    current_user_prompt = initial_user_prompt
-                    # Continue to the next iteration of the loop
+                if newly_added:
+                    # Files were successfully added, continue the loop
+                    current_user_prompt = initial_user_prompt # Keep the original prompt
                     continue
                 else:
                     # LLM requested files, but they were already in context.
@@ -341,51 +320,64 @@ class Emigo:
             if full_response: # Add the last assistant response before giving up
                  client.append_history({"role": "assistant", "content": full_response})
 
-    def _validate_and_clean_chat_files(self, project_path):
-        """
-        Checks if files in context exist, removes those that don't directly
-        from self.project_chat_files.
-        """
-        if project_path not in self.project_chat_files:
-            return # No context to validate
 
-        original_files = list(self.project_chat_files[project_path]) # Iterate over a copy
-        removed_files = []
-
-        for filename in original_files:
-            abs_path = os.path.abspath(os.path.join(project_path, filename))
-            if not (os.path.exists(abs_path) and os.path.isfile(abs_path)):
-                # Remove directly from the source list
-                try:
-                    self.project_chat_files[project_path].remove(filename)
-                    removed_files.append(filename)
-                except ValueError:
-                    # Should not happen if iterating over a copy, but safety first
-                    print(f"Warning: Tried to remove '{filename}' during validation but it was already gone.", file=sys.stderr)
-
-
-        if removed_files:
-            removed_str = ', '.join(removed_files)
-            message_emacs(f"Removed non-existent files from context: {removed_str}")
-            print(f"Removed non-existent files from context: {removed_str}", file=sys.stderr)
-        # No return value needed, modification happens in place
-
-
-    def send_llm_message(self, project_path, prompt, chat_files):
+    def send_llm_message(self, project_path, prompt):
         """Sends a subsequent message, triggering the interaction loop."""
         if project_path in self.llm_client_dict:
             client = self.llm_client_dict[project_path]
 
-            # --- Validate chat files (modifies self.project_chat_files in place) ---
-            self._validate_and_clean_chat_files(project_path)
-
-            # Call the interaction loop without passing the chat files list.
+            # Call the interaction loop. It will fetch the current context internally.
             self._execute_llm_interaction_loop(project_path, client, initial_user_prompt=prompt)
         else:
             print(f"EMIGO ERROR: LLM client not found for project path {project_path} in send_llm_message.")
 
+    def add_files_to_context(self, project_path, files_to_add):
+        """
+        Adds a list of files to the chat context for a given project.
 
-    def start_llm_client(self, project_path, prompt, chat_files):
+        Handles validation (existence, within project), prevents duplicates,
+        updates self.project_chat_files, and notifies Emacs.
+
+        Args:
+            project_path: The absolute path to the project root.
+            files_to_add: A list of relative file paths to potentially add.
+
+        Returns:
+            A list of the files that were newly added to the context.
+        """
+        if not files_to_add:
+            return []
+
+        # Ensure the project list exists
+        chat_files_list = self.project_chat_files.setdefault(project_path, [])
+        # Use a set for efficient checking of existing files
+        chat_files_set = set(chat_files_list)
+        newly_added = []
+
+        for file_rel_path in files_to_add:
+            if file_rel_path in chat_files_set:
+                continue # Skip duplicates
+
+            abs_path = os.path.abspath(os.path.join(project_path, file_rel_path))
+
+            # Validate: exists, is a file, and is within the project directory
+            if os.path.commonpath([project_path, abs_path]) == project_path and os.path.isfile(abs_path):
+                chat_files_list.append(file_rel_path) # Add to the list
+                chat_files_set.add(file_rel_path)   # Add to the set for future checks
+                newly_added.append(file_rel_path)
+            else:
+                # Optionally log or notify about invalid files
+                print(f"Warning: Ignoring request to add invalid or non-existent file: {file_rel_path}", file=sys.stderr)
+                # eval_in_emacs("message", f"[Emigo] Ignoring invalid file: {file_rel_path}")
+
+        if newly_added:
+            added_files_str = ', '.join(newly_added)
+            message_emacs(f"Added files to context: {added_files_str}")
+            print(f"Added files to context: {added_files_str}", file=sys.stderr)
+
+        return newly_added
+
+    def start_llm_client(self, project_path, prompt):
         """Starts a new LLM client and triggers the interaction loop."""
         verbose = True # Or get from config
         # --- Get Model Config ---
@@ -403,12 +395,13 @@ class Emigo:
         )
         self.llm_client_dict[project_path] = client
 
-        # --- Store and validate initial chat files ---
-        # Store the initial list first
-        self.project_chat_files[project_path] = chat_files
+        # --- Initialize chat files (if any were mentioned in the first prompt) ---
+        # Note: The initial prompt's mentions were already added in emigo_project
+        # before this function was called. We don't need to pass chat_files here.
+        # self.project_chat_files.setdefault(project_path, []) # Ensure list exists
 
         # --- Start Interaction Loop ---
-        # Call the interaction loop without passing the chat files list.
+        # Call the interaction loop. It will fetch the current context internally.
         self._execute_llm_interaction_loop(project_path, client, initial_user_prompt=prompt)
 
 
