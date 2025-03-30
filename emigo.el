@@ -587,6 +587,7 @@ Otherwise return nil."
             (when (and diff-start-pos diff-end-pos
                        (< diff-start-pos diff-end-pos))
               (emigo-highlight-diff-region diff-start-pos diff-end-pos)
+              (emigo-toggle-truncate-in-region diff-start-pos diff-end-pos)
               ))
 
           (goto-char (point-max))
@@ -594,6 +595,14 @@ Otherwise return nil."
           (forward-char (1- (length emigo-prompt-string)))
           (emigo-lock-region (point-min) (point))
           )))))
+
+(defun emigo-toggle-truncate-in-region (beg end)
+  (interactive)
+  (save-excursion
+    (save-restriction
+      (narrow-to-region beg end)
+      (setq truncate-lines (not truncate-lines))
+      (redisplay))))
 
 (defun emigo-highlight-diff-region (beg end)
   "Apply custom syntax highlighting to diff text in the selected region."
@@ -613,7 +622,7 @@ Otherwise return nil."
            ;; Added lines (+)
            ((eq first-char ?+)
             (add-text-properties (point) line-end
-                                 '(font-lock-face (:foreground "green"))))
+                                 '(font-lock-face font-lock-keyword-face)))
            ;; Deleted lines (-)
            ((eq first-char ?-)
             (add-text-properties (point) line-end

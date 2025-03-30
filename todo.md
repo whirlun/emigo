@@ -1,5 +1,3 @@
-1. AI 输出后的语法高亮处理
-   - (English: Syntax highlighting for AI output.)
 2. AI 输出完成后， 根据 diff 的内容， 更新 “补丁文件列表”， 并在左边弹出类似 magit 的 diff apply/cancel 操作 ，现在 ediff 的分屏 review diff 太难用了
    - (English: After AI output is complete, update the "patch file list" based on the diff content, and pop up a magit-like diff apply/cancel operation on the left. The current ediff split-screen diff review is too difficult to use.)
 3. 切换不同的工作区的时候， 侧边栏是否需要同步显示？ 这个我还没有想清楚， 自动切方便， 但是自动切侧边栏的内容是不是也不是用户想要的？
