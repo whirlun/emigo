@@ -1,5 +1,5 @@
-1. 输出区域 read-only, 输入区域支持 @ 文件名补全
-   - (English: The output area should be read-only, and the input area should support @ filename completion.)
+1.输入区域支持 @ 文件名补全
+   - (English: and the input area should support @ filename completion.)
 2. AI 输出后的语法高亮处理
    - (English: Syntax highlighting for AI output.)
 3. AI 输出完成后， 根据 diff 的内容， 更新 “补丁文件列表”， 并在左边弹出类似 magit 的 diff apply/cancel 操作 ，现在 ediff 的分屏 review diff 太难用了
