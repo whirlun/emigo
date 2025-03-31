@@ -9,7 +9,7 @@
 ;; Copyright (C) 2025, Emigo, all rights reserved.
 ;; Created: 2025-03-29
 ;; Version: 0.5
-;; Last-Updated: Mon Mar 31 16:18:05 2025 (-0400)
+;; Last-Updated: Mon Mar 31 19:16:40 2025 (-0400)
 ;;           By: Mingde (Matthew) Zeng
 ;; Package-Requires: ((emacs "26.1") (transient "0.3.0") (compat "30.0.2.0"))
 ;; Keywords: ai emacs llm aider ai-pair-programming tools
@@ -291,8 +291,9 @@ Then Emigo will start by gdb, please send new issue with `emigo-name' buffer con
         (kill-buffer buffer))))
   (setq emigo-project-buffers nil)
 
-  ;; Close dedicated window.
-  (emigo-dedicated-close)
+  ;; Close dedicated window and cancel timer.
+  (emigo-close)
+  (emigo--cancel-dedicated-window-timer)
 
   ;; Run stop process hooks.
   (run-hooks 'emigo-stop-process-hook)
@@ -411,39 +412,56 @@ as the session path."
     (when (and prompt (not (string-empty-p prompt)))
       (emigo-call-async "emigo_send" session-path prompt))))
 
-(defcustom emigo-dedicated-window-width 50
+;; --- Dedicated Window Width Enforcement ---
+
+(defcustom emigo-window-width 50
   "The height of `emigo' dedicated window."
   :type 'integer
   :group 'emigo)
 
-(defvar emigo-dedicated-window nil
+(defvar emigo-window nil
   "The dedicated `emigo' window.")
 
-(defvar emigo-dedicated-buffer nil
+(defvar emigo-buffer nil
   "The dedicated `emigo' buffer.")
+
+(defvar emigo-window-resize-timer nil
+  "Timer to periodically enforce the dedicated window width.")
 
 (defvar emigo-saved-window-width nil
   "Saved width of emigo dedicated window before ediff.")
 
 (defun emigo-save-window-width ()
-  "Save the current width of emigo dedicated window before ediff."
-  (when (and emigo-dedicated-window (window-live-p emigo-dedicated-window))
-    (setq emigo-saved-window-width (window-width emigo-dedicated-window))))
+  "Save the current width of emigo dedicated window."
+  (when (and emigo-window (window-live-p emigo-window))
+    (setq emigo-saved-window-width (window-width emigo-window))))
 
-(defun emigo-restore-window-width ()
-  "Restore the saved width of emigo dedicated window after ediff."
-  (when (and emigo-dedicated-window
-             (window-live-p emigo-dedicated-window)
-             emigo-saved-window-width)
-    (let ((current-width (window-width emigo-dedicated-window)))
-      (unless (= current-width emigo-saved-window-width)
-        (window-resize emigo-dedicated-window
-                       (- emigo-saved-window-width current-width)
-                       t)))))
+(defun emigo-ensure-window-width ()
+  "Restore the saved width of emigo dedicated window."
+  (when (and (emigo-exist-p)
+             emigo-saved-window-width
+             (not (= (window-width emigo-window) emigo-saved-window-width)))
+      (window-resize emigo-window
+                     (- emigo-saved-window-width (window-width emigo-window))
+                     t)))
 
 ;; Add hooks for ediff
 (add-hook 'ediff-before-setup-hook #'emigo-save-window-width)
-(add-hook 'ediff-quit-hook #'emigo-restore-window-width)
+(add-hook 'ediff-quit-hook #'emigo-ensure-window-width)
+
+(defun emigo--start-dedicated-window-timer ()
+  "Start the timer to enforce the dedicated window width."
+  (emigo--cancel-dedicated-window-timer) ;; Cancel existing timer first
+  (setq emigo-window-resize-timer
+        (run-with-timer 1 1 #'emigo-ensure-window-width))) ;; Check every 1 second
+
+(defun emigo--cancel-dedicated-window-timer ()
+  "Cancel the timer that enforces the dedicated window width."
+  (when (timerp emigo-window-resize-timer)
+    (cancel-timer emigo-window-resize-timer))
+  (setq emigo-window-resize-timer nil))
+
+;; --- End Dedicated Window Width Enforcement ---
 
 (defun emigo-current-window-take-height (&optional window)
   "Return the height the `window' takes up.
@@ -452,10 +470,9 @@ If `window' is nil, get current window."
   (let ((edges (window-edges window)))
     (- (nth 3 edges) (nth 1 edges))))
 
-(defun emigo-dedicated-exist-p ()
-  (and (emigo-buffer-exist-p emigo-dedicated-buffer)
-       (emigo-window-exist-p emigo-dedicated-window)
-       ))
+(defun emigo-exist-p ()
+  (and (emigo-buffer-exist-p emigo-buffer)
+       (emigo-window-exist-p emigo-window)))
 
 (defun emigo-window-exist-p (window)
   "Return `non-nil' if WINDOW exist.
@@ -467,60 +484,67 @@ Otherwise return nil."
 Otherwise return nil."
   (and buffer (buffer-live-p buffer)))
 
-(defun emigo-dedicated-close ()
+(defun emigo-close ()
   "Close dedicated `emigo' window."
   (interactive)
-  (if (emigo-dedicated-exist-p)
+  (if (emigo-exist-p)
       (let ((current-window (selected-window)))
+        ;; Cancel the resize timer first
+        (emigo--cancel-dedicated-window-timer)
         ;; Remember height.
-        (emigo-dedicated-select-window)
-        (delete-window emigo-dedicated-window)
+        (emigo-select-window)
+        (delete-window emigo-window)
+        (setq emigo-window nil) ;; Clear the variable
         (if (emigo-window-exist-p current-window)
             (select-window current-window)))
-    (message "`EMIGO DEDICATED' window is not exist.")))
+    (message "`EMIGO DEDICATED' window does not exist.")))
 
-(defun emigo-dedicated-toggle ()
+(defun emigo-toggle ()
   "Toggle dedicated `emigo' window."
   (interactive)
-  (if (emigo-dedicated-exist-p)
-      (emigo-dedicated-close)
-    (emigo-dedicated-open)))
+  (if (emigo-exist-p)
+      (emigo-close)
+    (emigo-open)))
 
-(defun emigo-dedicated-open ()
+(defun emigo-open ()
   "Open dedicated `emigo' window."
   (interactive)
-  (if (emigo-window-exist-p emigo-dedicated-window)
-      (emigo-dedicated-select-window)
-    (emigo-dedicated-pop-window)))
+  (if (emigo-window-exist-p emigo-window)
+      (emigo-select-window)
+    (emigo-pop-window)))
 
-(defun emigo-dedicated-pop-window ()
+(defun emigo-pop-window ()
   "Pop emigo dedicated window if it exists."
-  (setq emigo-dedicated-window (display-buffer (current-buffer) `(display-buffer-in-side-window (side . right) (window-width . ,emigo-dedicated-window-width))))
-  (select-window emigo-dedicated-window)
-  (set-window-buffer emigo-dedicated-window emigo-dedicated-buffer)
+  (setq emigo-window (display-buffer (current-buffer) `(display-buffer-in-side-window (side . right) (window-width . ,emigo-window-width))))
+  (select-window emigo-window)
+  (set-window-buffer emigo-window emigo-buffer)
   (set-window-dedicated-p (selected-window) t)
   ;; Save initial window width
-  (setq emigo-saved-window-width (window-width emigo-dedicated-window)))
+  (setq emigo-saved-window-width (window-width emigo-window))
+  ;; Start the enforcement timer
+  (emigo--start-dedicated-window-timer))
 
-(defun emigo-dedicated-select-window ()
+(defun emigo-select-window ()
   "Select emigo dedicated window."
-  (select-window emigo-dedicated-window)
+  (select-window emigo-window)
   (set-window-dedicated-p (selected-window) t))
 
 (defun emigo-create-window (buffer)
   "Display BUFFER in the dedicated Emigo window."
   (unless (bufferp buffer)
     (error "[Emigo] Invalid buffer provided to emigo-create-ai-window: %s" buffer))
-  (setq emigo-dedicated-buffer buffer)
-  (unless (emigo-window-exist-p emigo-dedicated-window)
-    (setq emigo-dedicated-window
+  (setq emigo-buffer buffer)
+  (unless (emigo-window-exist-p emigo-window)
+    (setq emigo-window
           (display-buffer buffer ;; Display the specific buffer
                           `(display-buffer-in-side-window
                             (side . right)
-                            (window-width . ,emigo-dedicated-window-width)))))
-  (select-window emigo-dedicated-window)
-  (set-window-buffer emigo-dedicated-window emigo-dedicated-buffer) ;; Ensure correct buffer is shown
-  (set-window-dedicated-p (selected-window) t))
+                            (window-width . ,emigo-window-width)))))
+  (select-window emigo-window)
+  (set-window-buffer emigo-window emigo-buffer) ;; Ensure correct buffer is shown
+  (set-window-dedicated-p (selected-window) t)
+  ;; Start the enforcement timer
+  (emigo--start-dedicated-window-timer))
 
 (defvar emigo-mode-map
   (let ((map (make-sparse-keymap)))
@@ -626,23 +650,23 @@ Otherwise return nil."
     (overlay-put overlay 'front-sticky t)
     (overlay-put overlay 'rear-nonsticky nil)))
 
-(defun emigo-dedicated-split-window ()
+(defun emigo-split-window ()
   "Split dedicated window at bottom of frame."
   ;; Select bottom window of frame.
   (ignore-errors
     (dotimes (i 50)
       (windmove-right)))
   ;; Split with dedicated window height.
-  (split-window (selected-window) (- (emigo-current-window-take-height) emigo-dedicated-window-width) t)
+  (split-window (selected-window) (- (emigo-current-window-take-height) emigo-window-width) t)
   (other-window 1)
-  (setq emigo-dedicated-window (selected-window)))
+  (setq emigo-window (selected-window)))
 
 (defadvice delete-other-windows (around emigo-delete-other-window-advice activate)
   "This is advice to make `emigo' avoid dedicated window deleted.
 Dedicated window can't deleted by command `delete-other-windows'."
-  (unless (eq (selected-window) emigo-dedicated-window)
-    (let ((emigo-dedicated-active-p (emigo-window-exist-p emigo-dedicated-window)))
-      (if emigo-dedicated-active-p
+  (unless (eq (selected-window) emigo-window)
+    (let ((emigo-active-p (emigo-window-exist-p emigo-window)))
+      (if emigo-active-p
           (let ((current-window (selected-window)))
             (cl-dolist (win (window-list))
               (when (and (window-live-p win)
@@ -651,7 +675,7 @@ Dedicated window can't deleted by command `delete-other-windows'."
                 (delete-window win))))
         ad-do-it))))
 
-(defadvice other-window (after emigo-dedicated-other-window-advice)
+(defadvice other-window (after emigo-other-window-advice)
   "Default, can use `other-window' select window in cyclic ordering of windows.
 But sometimes we don't want to select `sr-speedbar' window,
 but use `other-window' and just make `emigo' dedicated
@@ -659,8 +683,8 @@ window as a viewable sidebar.
 
 This advice can make `other-window' skip `emigo' dedicated window."
   (let ((count (or (ad-get-arg 0) 1)))
-    (when (and (emigo-window-exist-p emigo-dedicated-window)
-               (eq emigo-dedicated-window (selected-window)))
+    (when (and (emigo-window-exist-p emigo-window)
+               (eq emigo-window (selected-window)))
       (other-window count))))
 
 (defun emigo-remove-file-from-context ()
