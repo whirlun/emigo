@@ -9,7 +9,7 @@
 ;; Copyright (C) 2025, Emigo, all rights reserved.
 ;; Created: 2025-03-29
 ;; Version: 0.5
-;; Last-Updated: Sun Mar 30 21:53:18 2025 (-0400)
+;; Last-Updated: Sun Mar 30 22:29:08 2025 (-0400)
 ;;           By: Mingde (Matthew) Zeng
 ;; Package-Requires: ((emacs "26.1") (transient "0.3.0") (compat "30.0.2.0"))
 ;; Keywords: ai emacs llm aider ai-pair-programming tools
@@ -156,8 +156,12 @@ Searches parent directories for existing sessions."
 ;; --- End new functions ---
 
 (defvar emigo-project-buffers nil)   ;; Keep track of buffer objects
+
 (defvar-local emigo-session-path nil ;; Buffer-local session path
   "The session path (project root or current dir) associated with this Emigo buffer.")
+
+(defvar-local emigo--llm-output "" ;; Buffer-local LLM output accumulator
+  "Accumulates the LLM output stream for the current interaction.")
 ;; Removed emigo-project-root buffer-local variable
 
 (defvar emigo-epc-process nil)
@@ -544,6 +548,8 @@ Otherwise return nil."
 (defun emigo-send-prompt ()
   "Send the current prompt to the AI."
   (interactive)
+  ;; Clear the LLM output accumulator for the new interaction
+  (setq-local emigo--llm-output "")
   (let ((prompt (save-excursion
                   (goto-char (point-max))
                   (search-backward-regexp (concat "^" emigo-prompt-string) nil t)
@@ -579,7 +585,8 @@ Otherwise return nil."
 
           (if (equal role "user")
               (insert (propertize content 'face font-lock-keyword-face))
-            (insert content))
+            (insert content)
+            (setq-local emigo--llm-output (concat emigo--llm-output content)))
 
           (when (equal role "llm")
             (let* ((llm-start-pos (save-excursion
@@ -617,7 +624,6 @@ Otherwise return nil."
   (with-silent-modifications
     ;; First clear existing highlights
     (remove-text-properties beg end '(font-lock-face nil))
-
     ;; Scan line by line and apply highlighting
     (save-excursion
       (goto-char beg)
