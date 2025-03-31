@@ -1,6 +1,6 @@
 # Emigo: Agentic AI Development in Emacs
 
-Emigo brings AI-powered development to Emacs, integrating large language models directly into your workflow. Inspired by the capabilities of tools like [Aider](https://github.com/paul-gauthier/aider) and [Cline](https://github.com/sturdy-dev/cline), and building upon the foundation of [Aidermacs](https://github.com/MatthewZMD/aidermacs), Emigo acts as an **agentic** AI assistant. It leverages **tool use** to interact with your project, read files, write code, execute commands, and more, all within Emacs.
+Emigo brings AI-powered development to Emacs, integrating large language models directly into your workflow. Inspired by the capabilities of tools like [Aider](https://github.com/paul-gauthier/aider) and [Cline](https://github.com/sturdy-dev/cline), and the spiritual successor of [Aidermacs](https://github.com/MatthewZMD/aidermacs), Emigo acts as an **agentic** AI assistant. It leverages **tool use** to interact with your project, read files, write code, execute commands, and more, all within Emacs.
 
 ## Development Status
 

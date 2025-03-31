@@ -483,8 +483,7 @@ class RepoMap:
         personalize_base = 100 / num_nodes_estimate if num_nodes_estimate > 0 else 1
 
         for fname in fnames_iter:
-            if self.verbose:
-                print(f"Processing {fname}")
+            # print(f"Processing {fname}")
 
             try:
                 file_ok = Path(fname).is_file()

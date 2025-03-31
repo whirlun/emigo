@@ -73,7 +73,7 @@ class Agents:
             # Regenerate the map to ensure freshness
             try:
                 print("Regenerating repository map for environment details...", file=sys.stderr)
-                fresh_repomap_content = self.repo_mapper.generate_map(chat_files=[]) # Pass empty list
+                fresh_repomap_content = self.repo_mapper.generate_map()
                 if not fresh_repomap_content:
                     fresh_repomap_content = "(No map content generated)"
                 self.last_repomap_content = fresh_repomap_content # Update the cache
@@ -317,13 +317,9 @@ class Agents:
 
             # Read back the potentially auto-formatted content via Emacs
             # This requires a new synchronous Emacs function
-            final_content = get_emacs_func_result("read-file-content-sync", abs_path)
+            get_emacs_func_result("read-file-content-sync", abs_path)
 
-            return self._format_tool_result(
-                f"{TOOL_RESULT_SUCCESS}\nFile '{posix_rel_path}' written successfully.\n\n"
-                f"<final_file_content path=\"{posix_rel_path}\">\n{final_content}\n</final_file_content>\n\n"
-                f"IMPORTANT: For any future changes to this file, use the final_file_content shown above as your reference."
-            )
+            return self._format_tool_result(f"{TOOL_RESULT_SUCCESS}\nFile '{posix_rel_path}' written successfully.\n")
         except Exception as e:
             print(f"Error writing file '{rel_path}': {e}", file=sys.stderr)
             return self._format_tool_error(f"Error writing file: {e}")
@@ -366,12 +362,7 @@ class Agents:
                  # Compare the string representation of the status symbol
                  elif str(status) == ':final_content' and len(result) > 1:
                      # Success, Emacs returned the final content
-                     final_content = result[1]
-                     return self._format_tool_result(
-                         f"{TOOL_RESULT_SUCCESS}\nFile '{posix_rel_path}' modified successfully.\n\n"
-                         f"<final_file_content path=\"{posix_rel_path}\">\n{final_content}\n</final_file_content>\n\n"
-                         f"IMPORTANT: For any future changes to this file, use the final_file_content shown above as your reference."
-                     )
+                     return self._format_tool_result(f"{TOOL_RESULT_SUCCESS}\nFile '{posix_rel_path}' modified successfully.\n")
 
             # Unexpected result format from Emacs
             print(f"Unexpected result from emigo--apply-diff-sync for '{rel_path}': {result}", file=sys.stderr)
@@ -427,7 +418,7 @@ class Agents:
             chat_files = self.chat_files_ref.get(self.session_path, [])
             # TODO: Get mentioned files/idents if needed by repomapper
             print(f"Generating repomap for {self.session_path} with chat files: {chat_files}", file=sys.stderr)
-            repo_map_content = self.repo_mapper.generate_map(chat_files=chat_files)
+            repo_map_content = self.repo_mapper.generate_map()
             if not repo_map_content:
                 repo_map_content = "(No map content generated)"
 
@@ -655,14 +646,31 @@ class Agents:
             eval_in_emacs("emigo--agent-finished", self.session_path)
 
     def _handle_search_files(self, params: Dict[str, str]) -> str:
-        """Search files for text patterns using Python's built-in capabilities."""
+        """Search files for text patterns using Python regex matching.
+
+        Args:
+            params: Dictionary containing:
+                - path: Directory to search (defaults to current directory)
+                - pattern: Python regex pattern to search for
+                - case_sensitive: Whether search is case sensitive (default false)
+                - max_matches: Maximum number of matches to return (default 20, max 100)
+
+        Returns:
+            Formatted string with matches or error message
+        """
         rel_path = params.get("path", ".")  # Default to current directory
         pattern = params.get("pattern")
         case_sensitive = params.get("case_sensitive", "false").lower() == "true"
         max_matches = min(100, int(params.get("max_matches", "20")))  # Cap at 100 matches
 
         if not pattern:
-            return self._format_tool_error("Missing 'pattern' parameter")
+            return self._format_tool_error(
+                "Missing 'pattern' parameter. Provide a Python regex pattern.\n"
+                "Example patterns:\n"
+                "- 'def\\s+\\w+' to find function definitions\n"
+                "- 'TODO|FIXME' to find todos\n"
+                "- '\\bclass\\s+\\w+' to find class definitions"
+            )
 
         abs_path = os.path.abspath(os.path.join(self.session_path, rel_path))
         try:
