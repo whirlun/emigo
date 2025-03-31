@@ -669,7 +669,8 @@ class Agents:
                 "Example patterns:\n"
                 "- 'def\\s+\\w+' to find function definitions\n"
                 "- 'TODO|FIXME' to find todos\n"
-                "- '\\bclass\\s+\\w+' to find class definitions"
+                "- '\\bclass\\s+\\w+' to find class definitions\n"
+                "See Python regex syntax: https://docs.python.org/3/library/re.html"
             )
 
         abs_path = os.path.abspath(os.path.join(self.session_path, rel_path))
@@ -677,10 +678,18 @@ class Agents:
             if not os.path.exists(abs_path):
                 return self._format_tool_error(f"Path not found: {rel_path}")
 
-            matches = []
+            # Validate regex pattern first
             flags = 0 if case_sensitive else re.IGNORECASE
-            compiled_pattern = re.compile(pattern, flags)
+            try:
+                compiled_pattern = re.compile(pattern, flags)
+            except re.error as e:
+                return self._format_tool_error(
+                    f"Invalid regex pattern: {e}\n"
+                    f"Pattern: {pattern}\n"
+                    "See Python regex syntax: https://docs.python.org/3/library/re.html"
+                )
 
+            matches = []
             # Walk through files and search
             for root, _, filenames in os.walk(abs_path):
                 for filename in filenames:
@@ -719,4 +728,4 @@ class Agents:
             return self._format_tool_result(result)
 
         except Exception as e:
-            return self._format_tool_error(f"Error searching files: {e}")
+            return self._format_tool_error(f"Error searching files: {e}\n{traceback.format_exc()}")
