@@ -96,28 +96,27 @@ class Emigo:
 
             if rel_filename in self.chat_files[session_path]:
                 self.chat_files[session_path].remove(rel_filename)
-                message_emacs(f"Removed '{rel_filename}' from chat context for session: {os.path.basename(session_path)}")
+                message_emacs(f"Removed '{rel_filename}' from chat context for session: {session_path}")
                 return True
             else:
-                message_emacs(f"File '{rel_filename}' not found in chat context for session: {os.path.basename(session_path)}")
+                message_emacs(f"File '{rel_filename}' not found in chat context for session: {session_path}")
                 return False
         else:
-            message_emacs(f"No chat context found for session: {os.path.basename(session_path)}")
+            message_emacs(f"No chat context found for session: {session_path}")
             return False
 
-    def emigo_session(self, session_path: str, prompt: str):
+    def emigo_send(self, session_path: str, prompt: str):
         """Handles a prompt for a specific session path by delegating to the Agents."""
-        print(f"Received prompt for session: {os.path.basename(session_path)} (Path: {session_path})", file=sys.stderr)
+        print(f"Received prompt for session: {session_path} (Path: {session_path})", file=sys.stderr)
 
-        # Ensure session_path is absolute and valid directory
+        # Ensure session_path is valid directory
         try:
-            session_path = os.path.abspath(session_path)
             if not os.path.isdir(session_path):
                  raise ValueError("Session path is not a valid directory")
         except Exception as e:
              print(f"ERROR: Invalid session path provided: {session_path} - {e}", file=sys.stderr)
              # Try to message Emacs even if path is bad, using a placeholder name
-             eval_in_emacs("emigo--flush-buffer", f"invalid-session-{os.path.basename(session_path)}", f"[Error: Invalid session path '{session_path}']", "error", True)
+             eval_in_emacs("emigo--flush-buffer", f"invalid-session-{session_path}", f"[Error: Invalid session path '{session_path}']", "error", True)
              return
 
         # Flush the user prompt to the Emacs buffer first
@@ -149,11 +148,6 @@ class Emigo:
         thread = threading.Thread(target=agent_instance.run_interaction, args=(prompt,))
         thread.daemon = True # Allow program to exit even if agents threads are running
         thread.start()
-
-    # Removed _extract_and_validate_mentions - handled in emigo_session
-    # Removed _parse_llm_for_file_requests - handled by Agents
-    # Removed _execute_llm_interaction_loop - handled by Agents.run_interaction
-    # Removed send_llm_message - logic merged into emigo_session
 
     def add_files_to_context(self, session_path: str, files_to_add: List[str]) -> List[str]:
         """
@@ -196,14 +190,14 @@ class Emigo:
                 # else: already in context
             else:
                 # File not found or outside session path
-                message_emacs(f"Warning: File '{file_path_input}' not found or invalid for session {os.path.basename(session_path)}.")
+                message_emacs(f"Warning: File '{file_path_input}' not found or invalid for session {session_path}.")
                 print(f"Warning: File '{file_path_input}' (resolved to {abs_path}) not found or invalid.", file=sys.stderr)
 
 
         if newly_added_rel_paths:
             added_files_str = ', '.join(newly_added_rel_paths)
-            message_emacs(f"Added files to context for session {os.path.basename(session_path)}: {added_files_str}")
-            print(f"Added files to context for session {os.path.basename(session_path)}: {added_files_str}", file=sys.stderr)
+            message_emacs(f"Added files to context for session {session_path}: {added_files_str}")
+            print(f"Added files to context for session {session_path}: {added_files_str}", file=sys.stderr)
             # Update the main chat_files dictionary (already done by modifying list in place)
 
         return newly_added_rel_paths # Return list of newly added relative paths
@@ -214,17 +208,17 @@ class Emigo:
         # --- Get Model Config ---
         vars_result = get_emacs_vars(["emigo-model", "emigo-base-url", "emigo-api-key"])
         if not vars_result or len(vars_result) < 3:
-             message_emacs(f"Error retrieving Emacs variables for session {os.path.basename(session_path)}.")
+             message_emacs(f"Error retrieving Emacs variables for session {session_path}.")
              return None
         model, base_url, api_key = vars_result
 
         if not model: # Check only essential model name
-            message_emacs(f"Please set emigo-model before starting session {os.path.basename(session_path)}.")
+            message_emacs(f"Please set emigo-model before starting session {session_path}.")
             return None
 
         # --- Initialize Client & Agents ---
         try:
-            print(f"Starting LLM Client & Agents for session: {os.path.basename(session_path)} (Path: {session_path})", file=sys.stderr)
+            print(f"Starting LLM Client & Agents for session: {session_path} (Path: {session_path})", file=sys.stderr)
             client = LLMClient(
                 model_name=model,
                 api_key=api_key if api_key else None, # Pass None if empty string
@@ -241,12 +235,23 @@ class Emigo:
             return agent_instance
         except Exception as e:
              print(f"Error initializing LLMClient/Agents for {session_path}: {e}", file=sys.stderr)
-             message_emacs(f"Error initializing agents for session {os.path.basename(session_path)}: {e}")
+             message_emacs(f"Error initializing agents for session {session_path}: {e}")
              return None
 
     def cleanup(self):
         """Do some cleanup before exit python process."""
         close_epc_client()
+
+    def clear_history(self, session_path: str) -> bool:
+        """Clear the chat history for the given session path."""
+        agent_instance = self.agent_dict.get(session_path)
+        print("clearing history", session_path, self.agent_dict)
+        if agent_instance:
+            agent_instance.llm_client.clear_history()
+            # Also clear local buffer via Emacs side
+            eval_in_emacs("emigo--clear-local-buffer", session_path)
+            return True
+        return False
 
 if __name__ == "__main__":
     if len(sys.argv) >= 3:

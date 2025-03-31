@@ -24,6 +24,8 @@ from utils import (
     get_emacs_var, get_emacs_vars, read_file_content, # Added read_file_content
     get_emacs_func_result # Added for potential future use
 )
+from config import IGNORED_DIRS # Import centralized list
+
 
 class Agents:
     """Handles the agentic loop, interacting with the LLM and executing tools."""
@@ -66,11 +68,71 @@ class Agents:
         details = "<environment_details>\n"
         details += f"# Session Directory\n{self.session_path.replace(os.sep, '/')}\n\n" # Use POSIX path
 
+        # --- Repository Map / Basic File Listing ---
+        if self.last_repomap_content is not None: # Check if repomap has been generated at least once
+            # Regenerate the map to ensure freshness
+            try:
+                print("Regenerating repository map for environment details...", file=sys.stderr)
+                fresh_repomap_content = self.repo_mapper.generate_map(chat_files=[]) # Pass empty list
+                if not fresh_repomap_content:
+                    fresh_repomap_content = "(No map content generated)"
+                self.last_repomap_content = fresh_repomap_content # Update the cache
+            except Exception as e:
+                print(f"Error regenerating repomap for environment details: {e}", file=sys.stderr)
+                # Keep the old content if regeneration fails, but add an error note
+                details += f"# Error regenerating repository map: {e}\n"
+                # Fall through to use potentially stale self.last_repomap_content
+
+            # Add the (potentially updated) repomap content
+            details += "# Repository Map (Refreshed)\n"
+            # Ensure repomap content is also in a code block for clarity
+            details += f"```\n{self.last_repomap_content}\n```\n\n"
+        else:
+            # If repomap hasn't been generated yet, show recursive directory listing
+            details += "# File/Directory Structure (use list_repomap tool for full details)\n"
+            try:
+                structure_lines = []
+                # Use IGNORED_DIRS from config
+                for root, dirnames, filenames in os.walk(self.session_path, topdown=True):
+                    # Filter ignored directories *before* processing
+                    dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS and not d.startswith('.')]
+                    # Filter ignored/hidden files
+                    filenames = [f for f in filenames if not f.startswith('.')] # Basic hidden file filter
+
+                    rel_root = os.path.relpath(root, self.session_path)
+                    if rel_root == '.':
+                        rel_root = '' # Avoid './' prefix for root level
+                    else:
+                        rel_root = rel_root.replace(os.sep, '/') + '/' # Use POSIX path and add slash
+
+                    # Calculate indentation level
+                    level = rel_root.count('/')
+
+                    # Add current directory to structure (if not root)
+                    if rel_root:
+                         indent = '  ' * (level -1) # Indent based on depth
+                         structure_lines.append(f"{indent}- {os.path.basename(rel_root[:-1])}/") # Show dir name
+
+                    # Add files in the current directory
+                    file_indent = '  ' * level
+                    for filename in sorted(filenames):
+                        structure_lines.append(f"{file_indent}- {filename}")
+
+                if structure_lines:
+                    details += "```\n" # Use code block for structure
+                    details += "\n".join(structure_lines)
+                    details += "\n```\n\n"
+                else:
+                    details += "(No relevant files or directories found)\n\n"
+            except Exception as e:
+                details += f"# Error listing files/directories: {str(e)}\n\n"
+
+
         # --- Added Chat Files Content ---
         # Use the direct reference chat_files_ref for reading here
         chat_files_list = self.chat_files_ref.get(self.session_path, [])
         if chat_files_list:
-            details += "# Added Files Content (Refreshed on Change)\n"
+            details += "# Added Files Contents\n"
             # Clean up stored mtimes/content for files no longer in chat_files_list
             current_chat_files_set = set(chat_files_list)
             for rel_path in list(self.chat_file_mtimes.keys()):
@@ -112,45 +174,6 @@ class Agents:
                     if rel_path in self.chat_file_contents: del self.chat_file_contents[rel_path]
             details += "\n" # Add separation
 
-        # --- Repository Map / Basic File Listing ---
-        if self.last_repomap_content is not None: # Check if repomap has been generated at least once
-            # Regenerate the map to ensure freshness
-            try:
-                print("Regenerating repository map for environment details...", file=sys.stderr)
-                fresh_repomap_content = self.repo_mapper.generate_map(chat_files=[]) # Pass empty list
-                if not fresh_repomap_content:
-                    fresh_repomap_content = "(No map content generated)"
-                self.last_repomap_content = fresh_repomap_content # Update the cache
-            except Exception as e:
-                print(f"Error regenerating repomap for environment details: {e}", file=sys.stderr)
-                # Keep the old content if regeneration fails, but add an error note
-                details += f"# Error regenerating repository map: {e}\n"
-                # Fall through to use potentially stale self.last_repomap_content
-
-            # Add the (potentially updated) repomap content
-            details += "# Repository Map (Refreshed)\n"
-            # Ensure repomap content is also in a code block for clarity
-            details += f"```\n{self.last_repomap_content}\n```\n\n"
-        else:
-            # If repomap hasn't been generated yet, show basic file listing
-            details += "# Files in Session Directory (use list_repomap tool for details)\n"
-            try:
-                files = []
-                # List only top-level files for brevity
-                for f in os.listdir(self.session_path):
-                    full_path = os.path.join(self.session_path, f)
-                    if os.path.isfile(full_path):
-                        # Exclude common hidden/config files from basic list if repomap will cover them
-                        if not f.startswith('.') and not f.endswith(('.log', '.tmp', '.swp')):
-                             files.append(f.replace(os.sep, '/')) # Use POSIX path
-
-                if files:
-                    details += "\n".join(f"- {f}" for f in sorted(files)) + "\n\n"
-                else:
-                    details += "(No relevant files found at top level)\n\n"
-            except Exception as e:
-                details += f"# Error listing files: {str(e)}\n\n"
-
 
         # --- Other details (Emacs state, etc.) ---
         # TODO: Add other details like open files, running terminals by calling Emacs funcs
@@ -160,8 +183,14 @@ class Agents:
         details += "</environment_details>"
         return details
 
-    def _parse_tool_use(self, response_text: str) -> Optional[Tuple[str, Dict[str, str]]]:
-        """Parses the LLM response XML for the *first* valid tool use, ignoring thinking tags."""
+    def _parse_tool_use(self, response_text: str) -> List[Tuple[str, Dict[str, str]]]:
+        """Parses the LLM response XML for *all* valid tool uses, ignoring thinking tags.
+
+        Returns:
+            A list of tuples, where each tuple is (tool_name, params_dict).
+            Returns an empty list if no known tools are found.
+        """
+        parsed_tools = []
         try:
             # 1. Define known tools
             known_tools = {
@@ -175,29 +204,27 @@ class Agents:
             # Regex looks for <tag>content</tag> structure
             potential_blocks = re.findall(r"<([a-zA-Z0-9_]+)(?:\s+[^>]*)?>(.*?)</\1>", response_text, re.DOTALL)
 
-            # 3. Iterate through blocks to find the first *known* tool
+            # 3. Iterate through blocks to find *all* known tools
             for tool_name, tool_content in potential_blocks:
                 if tool_name in known_tools:
-                    # Found a valid tool, parse its parameters
+                    # Found a known tool, parse its parameters
                     params = {}
                     param_matches = re.findall(r"<([a-zA-Z0-9_]+)>(.*?)</\1>", tool_content, re.DOTALL)
                     for param_name, param_value in param_matches:
                         params[param_name] = param_value.strip() # Strip whitespace
 
                     print(f"Parsed tool use: {tool_name} with params: {params}", file=sys.stderr)
-                    return tool_name, params
-                else:
-                    # This block is not a known tool (e.g., <thinking>), ignore it and continue searching
-                    print(f"Ignoring non-tool XML block: <{tool_name}>", file=sys.stderr)
-                    continue # Check the next potential block
+                    parsed_tools.append((tool_name, params))
+                # else: Ignore non-tool blocks like <thinking>
 
-            # 4. If loop completes without finding a known tool
-            print("No known tool use found in the response.", file=sys.stderr)
-            return None
+            # 4. Return the list of found tools (could be empty)
+            if not parsed_tools:
+                print("No known tool use found in the response.", file=sys.stderr)
+            return parsed_tools
 
         except Exception as e:
             print(f"Error parsing tool use: {e}\nText: {response_text}", file=sys.stderr)
-            return None
+            return [] # Return empty list on error
 
     def _format_tool_result(self, result_content: str) -> str:
         """Formats the tool result for the next LLM prompt."""
@@ -490,7 +517,6 @@ class Agents:
              print(f"Error during execution of tool '{tool_name}': {e}\n{traceback.format_exc()}", file=sys.stderr)
              return self._format_tool_error(f"Error executing tool '{tool_name}': {e}")
 
-
     def run_interaction(self, initial_user_prompt: str):
         """Runs the main agent interaction loop."""
         with self.lock:
@@ -502,20 +528,18 @@ class Agents:
 
         try:
             system_prompt = self._build_system_prompt()
-            # Get history *copy* to modify for this interaction run
-            current_history = list(self.llm_client.get_history())
 
-            # Add initial prompt to history for this run
-            current_history.append({"role": "user", "content": initial_user_prompt})
+            # Add initial prompt directly to the persistent history
+            self.llm_client.append_history({"role": "user", "content": initial_user_prompt})
 
             max_turns = 10 # Limit turns to prevent infinite loops
             for turn in range(max_turns):
                 print(f"\n--- Agent Turn {turn + 1}/{max_turns} (Session: {os.path.basename(self.session_path)}) ---", file=sys.stderr)
 
                 # --- Build Prompt ---
-                # Start with system prompt and the current interaction history
+                # Start with system prompt and the *current* persistent history
                 base_messages = [{"role": "system", "content": system_prompt}]
-                base_messages.extend(current_history) # Use the history for this run
+                base_messages.extend(self.llm_client.get_history()) # Get latest history
 
                 # Create a temporary list of messages to send, including context
                 messages_to_send = [msg.copy() for msg in base_messages] # Shallow copy is enough
@@ -556,33 +580,45 @@ class Agents:
                     error_message = f"[Error during LLM communication: {e}]"
                     print(f"\n{error_message}", file=sys.stderr)
                     eval_in_emacs("emigo--flush-buffer", self.session_path, str(error_message), "error", False)
-                    # Add error to local history for this run
-                    current_history.append({"role": "assistant", "content": error_message})
+                    # Add error to persistent history
+                    self.llm_client.append_history({"role": "assistant", "content": error_message})
                     break # Exit loop on error
 
-                # Add assistant's full response to local history *before* tool processing
-                current_history.append({"role": "assistant", "content": full_response})
+                # Add assistant's full response to persistent history *before* tool processing
+                self.llm_client.append_history({"role": "assistant", "content": full_response})
 
-                # --- Parse and Execute Tool ---
-                tool_info = self._parse_tool_use(full_response)
+                # --- Parse and Execute Tools ---
+                tool_list = self._parse_tool_use(full_response)
+                turn_tool_results = []
+                completion_signalled = False
+                tool_denied = False
 
-                if tool_info:
-                    tool_name, params = tool_info
-                    tool_result = self._execute_tool(tool_name, params)
+                if tool_list:
+                    print(f"Executing {len(tool_list)} tools for this turn...", file=sys.stderr)
+                    for tool_name, params in tool_list:
+                        tool_result = self._execute_tool(tool_name, params)
+                        turn_tool_results.append(tool_result) # Collect result
 
-                    if tool_result == "COMPLETION_SIGNALLED":
-                        print("Completion signalled. Ending interaction.", file=sys.stderr)
-                        # Don't add completion signal to history, just break
-                        break # Exit loop
+                        if tool_result == "COMPLETION_SIGNALLED":
+                            print("Completion signalled. Ending interaction after this tool.", file=sys.stderr)
+                            completion_signalled = True
+                            break # Stop processing more tools in this turn
 
-                    # Store result for the next turn's prompt
-                    self.current_tool_result = tool_result
-                    # Add tool result message to local history for the LLM's next turn
-                    current_history.append({"role": "user", "content": tool_result})
+                        if tool_result == self._format_tool_result(TOOL_DENIED):
+                            print("Tool denied, ending interaction after this tool.", file=sys.stderr)
+                            tool_denied = True
+                            break # Stop processing more tools in this turn
 
-                    # If the tool was denied, stop the loop for this interaction
-                    if tool_result == self._format_tool_result(TOOL_DENIED):
-                        print("Tool denied, ending current interaction.", file=sys.stderr)
+                    # Combine results for the next LLM turn
+                    if turn_tool_results:
+                        combined_result_message = "\n\n".join(turn_tool_results)
+                        # Store combined result for the next turn's prompt context (if needed, though env details might suffice)
+                        self.current_tool_result = combined_result_message
+                        # Add combined tool result message to persistent history for the LLM's next turn
+                        self.llm_client.append_history({"role": "user", "content": combined_result_message})
+
+                    # If completion was signalled or a tool was denied, exit the main loop
+                    if completion_signalled or tool_denied:
                         break
 
                 else:
@@ -605,9 +641,6 @@ class Agents:
                 print(f"Warning: Exceeded max turns ({max_turns}) for session {os.path.basename(self.session_path)}.", file=sys.stderr)
                 eval_in_emacs("emigo--flush-buffer", self.session_path, "[Warning: Agent reached max interaction turns]", "warning")
 
-            # --- IMPORTANT: Update the persistent history in LLMClient ---
-            # Only update if the interaction didn't end abruptly due to a critical error before history could be appended
-            self.llm_client.set_history(current_history)
 
         except Exception as e:
             print(f"Critical error in agent interaction loop: {e}\n{traceback.format_exc()}", file=sys.stderr)

@@ -118,6 +118,11 @@ class LLMClient:
             raise ValueError("Message must have 'role' and 'content' keys")
         self.chat_history.append(message)
 
+    def clear_history(self):
+        """Clears the chat history."""
+        self.chat_history = []
+        print("Chat history cleared.", file=sys.stderr)
+
     def send(
         self,
         messages: List[Dict],

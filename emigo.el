@@ -9,7 +9,7 @@
 ;; Copyright (C) 2025, Emigo, all rights reserved.
 ;; Created: 2025-03-29
 ;; Version: 0.5
-;; Last-Updated: Mon Mar 31 03:03:13 2025 (-0400)
+;; Last-Updated: Mon Mar 31 15:31:36 2025 (-0400)
 ;;           By: Mingde (Matthew) Zeng
 ;; Package-Requires: ((emacs "26.1") (transient "0.3.0") (compat "30.0.2.0"))
 ;; Keywords: ai emacs llm aider ai-pair-programming tools
@@ -172,6 +172,10 @@ Searches parent directories for existing sessions."
 
 (defvar-local emigo--llm-output "" ;; Buffer-local LLM output accumulator
   "Accumulates the LLM output stream for the current interaction.")
+
+(defvar-local emigo--chat-history nil
+  "List of (timestamp . content) pairs for the chat history.")
+
 ;; Removed emigo-project-root buffer-local variable
 
 (defvar emigo-epc-process nil)
@@ -220,16 +224,18 @@ Then Emigo will start by gdb, please send new issue with `emigo-name' buffer con
   "Call Python EPC function METHOD and ARGS asynchronously."
   (if (emigo-epc-live-p emigo-epc-process)
       (emigo-deferred-chain
+        ;; Pass args as a list directly
         (emigo-epc-call-deferred emigo-epc-process (read method) args))
     ;; If process not live, queue the first call details
     (setq emigo-first-call-method method)
-    (setq emigo-first-call-args args)
+    (setq emigo-first-call-args args) ;; Store args as a list
     (message "[Emigo] Process not started, queuing call: %s" method)
     (emigo-start-process)))
 
 (defun emigo-call--sync (method &rest args)
   "Call Python EPC function METHOD and ARGS synchronously."
   (if (emigo-epc-live-p emigo-epc-process)
+      ;; Pass args as a list directly
       (emigo-epc-call-sync emigo-epc-process (read method) args)
     (message "[Emigo] Process not started.")
     nil))
@@ -320,15 +326,14 @@ Then Emigo will start by gdb, please send new issue with `emigo-name' buffer con
                            ))
   (emigo-epc-init-epc-layer emigo-epc-process)
 
-  (when (and emigo-first-call-method
-             emigo-first-call-args)
+  (when (and emigo-first-call-method emigo-first-call-args)
+    ;; If first call details exist, execute the deferred call
     (emigo-deferred-chain
       (emigo-epc-call-deferred emigo-epc-process
                                (read emigo-first-call-method) ;; Method name
-                               emigo-first-call-args) ;; Args list (already includes session_path)
+                               emigo-first-call-args) ;; Pass the stored args list
       (setq emigo-first-call-method nil)
-      (setq emigo-first-call-args nil)
-      )))
+      (setq emigo-first-call-args nil))))
 
 (defun emigo-enable ()
   (add-hook 'post-command-hook #'emigo-start-process))
@@ -383,8 +388,7 @@ as the session path."
                          (file-truename (emigo-project-root))))
          (buffer-name (emigo-get-buffer-name nil session-path))
          (buffer (get-buffer-create buffer-name))
-         (prompt (read-string (format "Emigo Prompt (%s): "
-                                      (if current-prefix-arg default-directory "project root")))))
+         (prompt (read-string (format "Emigo Prompt (%s): " session-path))))
     (setq prompt (substring-no-properties prompt))
     ;; Ensure EPC process is running or starting
     (unless (emigo-epc-live-p emigo-epc-process)
@@ -405,7 +409,7 @@ as the session path."
 
     ;; Send prompt if provided
     (when (and prompt (not (string-empty-p prompt)))
-      (emigo-call-async "emigo_session" session-path prompt))))
+      (emigo-call-async "emigo_send" session-path prompt))))
 
 (defcustom emigo-dedicated-window-width 50
   "The height of `emigo' dedicated window."
@@ -526,6 +530,7 @@ Otherwise return nil."
     (define-key map (kbd "C-c C-r") #'emigo-restart-process)
     (define-key map (kbd "C-c C-f") #'emigo-remove-file-from-context)
     (define-key map (kbd "C-c C-l") #'emigo-list-context-files)
+    (define-key map (kbd "C-c C-y") #'emigo-clear-history)
     (define-key map (kbd "S-<return>") #'emigo-send-newline)
     map)
   "Keymap used by `emigo-mode'.")
@@ -570,7 +575,7 @@ Otherwise return nil."
       (search-backward-regexp (concat "^" emigo-prompt-string) nil t)
       (forward-char (length emigo-prompt-string))
       (delete-region (point) (point-max))
-      (emigo-call-async "emigo_session" emigo-session-path prompt))))
+      (emigo-call-async "emigo_send" emigo-session-path prompt))))
 
 (defun emigo--flush-buffer (session-path content role &rest init)
   "Flush CONTENT to the Emigo buffer associated with SESSION-PATH."
@@ -600,7 +605,11 @@ Otherwise return nil."
             (if (equal role "user")
                 (insert (propertize content 'face font-lock-keyword-face))
               (insert content)
-              (setq-local emigo--llm-output (concat emigo--llm-output content))))
+              (setq-local emigo--llm-output (concat emigo--llm-output content)))
+
+            ;; Record in history unless it's an error message or empty
+            (unless (or (equal role "error") (string-empty-p content))
+              (push (cons (current-time) content) emigo--chat-history)))
 
           (goto-char (point-max))
           (when (search-backward-regexp (concat "^" emigo-prompt-string) nil t)
@@ -680,7 +689,8 @@ This advice can make `other-window' skip `emigo' dedicated window."
         (setq file-to-remove (completing-read "Remove file from context: " chat-files nil t))
 
         (when (and file-to-remove (member file-to-remove chat-files))
-          (emigo-call-async emigo-session-path "remove_file_from_context" file-to-remove)
+          ;; Corrected: Pass method name first, then session path and file
+          (emigo-call-async "remove_file_from_context" emigo-session-path file-to-remove)
           ;; Message will be sent from Python side upon successful removal
           )))))
 
@@ -880,6 +890,41 @@ Handles potential errors and captures stdout/stderr."
     ;; Let Python handle making them relative if needed. Return full paths for now.
     (mapconcat #'identity files "\n")))
 
+(defun emigo--clear-local-buffer (session-path)
+  "Clear the local Emacs buffer content and history for SESSION-PATH."
+  (let ((buffer (get-buffer (emigo-get-buffer-name t session-path))))
+    (when buffer
+      (with-current-buffer buffer
+        ;; Clear local buffer history variable
+        (setq-local emigo--llm-output "")
+        (setq-local emigo--chat-history nil)
+        ;; Erase buffer content and reset prompt
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert (propertize (concat "\n\n" emigo-prompt-string) 'face font-lock-keyword-face))
+          (goto-char (point-max)))
+        (message "Local buffer cleared for session: %s" (file-name-nondirectory session-path))))))
+
+(defun emigo-clear-history ()
+  "Clear the chat history (both remote LLM and local buffer) for the current Emigo session."
+  (interactive)
+  (unless (emigo-epc-live-p emigo-epc-process)
+    (message "[Emigo] Process not running.")
+    (emigo-start-process)            ; Attempt to start if not running
+    (error "Emigo process was not running, please try again shortly."))
+
+  (let ((buffer (emigo-get-buffer-name t)))
+    (unless buffer
+      (error "[Emigo] No Emigo buffer found"))
+
+    (with-current-buffer buffer
+      (unless emigo-session-path
+        (error "[Emigo] Could not determine session path from buffer"))
+
+      ;; Call Python side to clear LLM history and trigger local buffer clear
+      (if (emigo-call--sync "clear_history" emigo-session-path)
+          (message "Cleared history for session: %s" (file-name-nondirectory emigo-session-path))
+        (message "Failed to clear history for session: %s" (file-name-nondirectory emigo-session-path))))))
 
 (defun emigo-list-context-files ()
   "List the files currently in the Emigo chat context for the current project."

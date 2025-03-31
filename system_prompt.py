@@ -92,7 +92,7 @@ Usage:
 </execute_command>
 
 ## read_file
-Description: Request to read the contents of a file at the specified path. Use this when you need to examine the contents of an existing file you do not know the contents of, for example to analyze code, review text files, or extract information from configuration files. Automatically extracts raw text from PDF and DOCX files. May not be suitable for other types of binary files, as it returns the raw content as a string.
+Description: Request to read the contents of a file at the specified path. Use this when you need to examine the contents of an existing file you do not know the contents of, for example to analyze code, review text files, or extract information from configuration files. Use it if the files are not present in <environment_details>. May not be suitable for other types of binary files, as it returns the raw content as a string.
 Parameters:
 - path: (required) The path of the file to read (relative to the session directory {session_dir})
 Usage:
@@ -360,9 +360,9 @@ CAPABILITIES
 
 - You have access to tools that let you execute CLI commands on the user's computer, list files, view source code definitions, regex search, read and edit files, and ask follow-up questions. These tools help you effectively accomplish a wide range of tasks, such as writing code, making edits or improvements to existing files, understanding the current state of a project, performing system operations, and much more.
 - When the user initially gives you a task, a recursive list of all filepaths in the session directory ('{session_dir}') will be included in environment_details. This provides an overview of the project's file structure, offering key insights into the project from directory/file names (how developers conceptualize and organize their code) and file extensions (the language used). This can also guide decision-making on which files to explore further. If you need to further explore directories such as outside the session directory, you can use the list_files tool. If you pass 'true' for the recursive parameter, it will list files recursively. Otherwise, it will list files at the top level, which is better suited for generic directories where you don't necessarily need the nested structure, like the Desktop.
-- You can use search_files to perform regex searches across files in a specified directory, outputting context-rich results that include surrounding lines. This is particularly useful for understanding code patterns, finding specific implementations, or identifying areas that need refactoring.
 - You can use the list_repomap tool to get an overview of source code definitions for all files at the top level of a specified directory. This can be particularly useful when you need to understand the broader context and relationships between certain parts of the code. You may need to call this tool multiple times to understand various parts of the codebase related to the task.
   - For example, when asked to make edits or improvements you might analyze the file structure in the initial environment_details to get an overview of the project, then use list_repomap to get further insight using source code definitions for files located in relevant directories, then read_file to examine the contents of relevant files, analyze the code and suggest improvements or make necessary edits, then use the replace_in_file tool to implement changes. If you refactored code that could affect other parts of the codebase, you could use search_files to ensure you update other files as needed.
+- You can use search_files to perform regex searches across files in a specified directory, outputting context-rich results that include surrounding lines. This is particularly useful for understanding code patterns, finding specific implementations, or identifying areas that need refactoring.
 - You can use the execute_command tool to run commands on the user's computer whenever you feel it can help accomplish the user's task. When you need to execute a CLI command, you must provide a clear explanation of what the command does. Prefer to execute complex CLI commands over creating executable scripts, since they are more flexible and easier to run. Interactive and long-running commands are allowed, since the commands are run in the user's VSCode terminal. The user may keep commands running in the background and you will be kept updated on their status along the way. Each command you execute is run in a new terminal instance.
 
 ====
@@ -413,126 +413,3 @@ You accomplish a given task iteratively, breaking it down into clear steps and w
 4. Once you've completed the user's task, you must use the attempt_completion tool to present the result of the task to the user. You may also provide a CLI command to showcase the result of your task; this can be particularly useful for web development tasks, where you can run e.g. `open index.html` to show the website you've built.
 5. The user may provide feedback, which you can use to make improvements and try again. But DO NOT continue in pointless back and forth conversations, i.e. don't end your responses with questions or offers for further assistance.`
 """
-
-# --- Example Messages (Using SEARCH/REPLACE and XML Tool Format) ---
-
-# Note: Fences are now quadruple backticks in the examples.
-EXAMPLE_MESSAGES = [
-    dict(
-        role="user",
-        content="Change get_factorial() in math_utils.py to use math.factorial.",
-    ),
-    dict(
-        role="assistant",
-        content="""<thinking>
-The user wants to modify the `get_factorial` function in `math_utils.py`.
-1.  I need to see the current content of `math_utils.py`.
-2.  Since I don't have the file content, I need to ask the user to provide it.
-3.  The best tool for this is `ask_followup_question`.
-</thinking>
-<ask_followup_question>
-<question>Could you please add the content of `math_utils.py` to the chat so I can modify it?</question>
-</ask_followup_question>""",
-    ),
-    dict(
-        role="user",
-        content="""
-math_utils.py
-````python
-# Utility functions for math operations
-
-def factorial(n):
-    "compute factorial"
-    if n == 0:
-        return 1
-    else:
-        return n * factorial(n-1)
-
-def get_factorial(num_str):
-    try:
-        n = int(num_str)
-        if n < 0:
-            return "Factorial not defined for negative numbers"
-        return str(factorial(n))
-    except ValueError:
-        return "Invalid input: Please enter an integer."
-
-````
-""",
-    ),
-    dict(
-        role="assistant",
-        content="""<thinking>
-Okay, I have the content of `math_utils.py`.
-The user wants to replace the custom `factorial` implementation within `get_factorial` with `math.factorial`.
-Steps:
-1. Import the `math` module at the top of the file.
-2. Remove the local `factorial` function definition.
-3. Modify `get_factorial` to call `math.factorial(n)` instead of `factorial(n)`.
-4. Use the `replace_in_file` tool with three SEARCH/REPLACE blocks.
-</thinking>
-I will modify `math_utils.py` to use `math.factorial`.
-
-<replace_in_file>
-<path>math_utils.py</path>
-<diff>
-````python
-<<<<<<< SEARCH
-# Utility functions for math operations
-=======
-import math
-
-# Utility functions for math operations
->>>>>>> REPLACE
-````
-````python
-<<<<<<< SEARCH
-
-def factorial(n):
-    "compute factorial"
-    if n == 0:
-        return 1
-    else:
-        return n * factorial(n-1)
-
-def get_factorial(num_str):
-=======
-def get_factorial(num_str):
->>>>>>> REPLACE
-````
-````python
-<<<<<<< SEARCH
-        if n < 0:
-            return "Factorial not defined for negative numbers"
-        return str(factorial(n))
-    except ValueError:
-        return "Invalid input: Please enter an integer."
-=======
-        if n < 0:
-            return "Factorial not defined for negative numbers"
-        # Use math.factorial
-        return str(math.factorial(n))
-    except ValueError:
-        return "Invalid input: Please enter an integer."
->>>>>>> REPLACE
-````
-</diff>
-</replace_in_file>""",
-    ),
-     dict(
-        role="user",
-        content=TOOL_RESULT_SUCCESS # Simulate user confirming successful application
-    ),
-    dict(
-        role="assistant",
-        content="""<thinking>
-The user confirmed the changes were applied successfully. The task is complete.
-I should use `attempt_completion`. No specific command is needed to demonstrate this change.
-</thinking>
-<attempt_completion>
-<result>
-I have updated `math_utils.py` to use the standard `math.factorial` function as requested.
-</result>
-</attempt_completion>"""
-    ),
-]
