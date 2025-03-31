@@ -7,8 +7,7 @@ import re
 import sys
 import threading
 import traceback
-import xml.etree.ElementTree as ET # Not used currently, but kept for potential future XML parsing needs
-from typing import List, Dict, Optional, Tuple, Union, Iterator # Added Union, Iterator
+from typing import List, Dict, Optional, Tuple
 
 from llm import LLMClient
 from repomapper import RepoMapper # Used by list_repomap tool
@@ -32,6 +31,7 @@ class Agents:
     def __init__(self, session_path: str, llm_client: LLMClient, chat_files_ref: Dict[str, List[str]], verbose: bool = False):
         self.session_path = session_path # This is the root directory for the session
         self.llm_client = llm_client
+        # self.emigo_instance = emigo_instance # Removed Emigo instance reference
         self.chat_files_ref = chat_files_ref # Reference to Emigo's chat_files dict
         self.verbose = verbose
         # Keep RepoMapper instance, but usage is restricted
@@ -39,6 +39,10 @@ class Agents:
         self.current_tool_result: Optional[str] = None
         self.is_running = False
         self.lock = threading.Lock()
+        # --- State for Environment Details ---
+        self.chat_file_mtimes: Dict[str, float] = {} # Store mtimes {rel_path: mtime}
+        self.chat_file_contents: Dict[str, str] = {} # Store content {rel_path: content}
+        self.last_repomap_content: Optional[str] = None
 
     def _build_system_prompt(self) -> str:
         """Builds the system prompt, inserting dynamic info."""
@@ -58,27 +62,97 @@ class Agents:
         return prompt
 
     def _get_environment_details(self) -> str:
-        """Fetches environment details like repo map, open files, etc."""
+        """Fetches environment details: added file contents and repo map."""
         details = "<environment_details>\n"
         details += f"# Session Directory\n{self.session_path.replace(os.sep, '/')}\n\n" # Use POSIX path
 
-        # List files in session directory
-        try:
-            files = []
-            for f in os.listdir(self.session_path):
-                full_path = os.path.join(self.session_path, f)
-                if os.path.isfile(full_path):
-                    files.append(f)
+        # --- Added Chat Files Content ---
+        # Use the direct reference chat_files_ref for reading here
+        chat_files_list = self.chat_files_ref.get(self.session_path, [])
+        if chat_files_list:
+            details += "# Added Files Content (Refreshed on Change)\n"
+            # Clean up stored mtimes/content for files no longer in chat_files_list
+            current_chat_files_set = set(chat_files_list)
+            for rel_path in list(self.chat_file_mtimes.keys()):
+                if rel_path not in current_chat_files_set:
+                    del self.chat_file_mtimes[rel_path]
+                    if rel_path in self.chat_file_contents:
+                        del self.chat_file_contents[rel_path]
 
-            if files:
-                details += "# Files in Session Directory\n"
-                details += "\n".join(f"- {f}" for f in sorted(files)) + "\n\n"
-            else:
-                details += "# No files found in session directory\n\n"
+            for rel_path in sorted(chat_files_list): # Sort for consistent order
+                abs_path = os.path.abspath(os.path.join(self.session_path, rel_path))
+                posix_rel_path = rel_path.replace(os.sep, '/')
+                try:
+                    # Access RepoMap's get_mtime via the RepoMapper instance
+                    current_mtime = self.repo_mapper.repo_mapper.get_mtime(abs_path)
+                    last_mtime = self.chat_file_mtimes.get(rel_path)
 
-        except Exception as e:
-            details += f"# Error listing files: {str(e)}\n\n"
+                    if current_mtime is None: # File might have been deleted
+                        content = f"# Error: Could not get mtime for {posix_rel_path}\n"
+                        if rel_path in self.chat_file_mtimes: del self.chat_file_mtimes[rel_path]
+                        if rel_path in self.chat_file_contents: del self.chat_file_contents[rel_path]
+                        self.chat_file_contents[rel_path] = content # Store error state
+                    elif last_mtime is None or current_mtime != last_mtime:
+                        # File is new or changed, read content
+                        if self.verbose: print(f"Reading updated content for {posix_rel_path}", file=sys.stderr)
+                        content = read_file_content(abs_path)
+                        self.chat_file_mtimes[rel_path] = current_mtime
+                        self.chat_file_contents[rel_path] = content # Update stored content
+                    else:
+                        # File unchanged, use cached content
+                        content = self.chat_file_contents.get(rel_path, f"# Error: Content not cached for {posix_rel_path}\n") # Fallback
 
+                    # Use markdown code block for file content
+                    details += f"## File: {posix_rel_path}\n```\n{content}\n```\n\n"
+
+                except Exception as e:
+                    details += f"## File: {posix_rel_path}\n# Error reading file: {e}\n\n"
+                    # Clean up potentially stale cache entries on error
+                    if rel_path in self.chat_file_mtimes: del self.chat_file_mtimes[rel_path]
+                    if rel_path in self.chat_file_contents: del self.chat_file_contents[rel_path]
+            details += "\n" # Add separation
+
+        # --- Repository Map / Basic File Listing ---
+        if self.last_repomap_content is not None: # Check if repomap has been generated at least once
+            # Regenerate the map to ensure freshness
+            try:
+                print("Regenerating repository map for environment details...", file=sys.stderr)
+                fresh_repomap_content = self.repo_mapper.generate_map(chat_files=[]) # Pass empty list
+                if not fresh_repomap_content:
+                    fresh_repomap_content = "(No map content generated)"
+                self.last_repomap_content = fresh_repomap_content # Update the cache
+            except Exception as e:
+                print(f"Error regenerating repomap for environment details: {e}", file=sys.stderr)
+                # Keep the old content if regeneration fails, but add an error note
+                details += f"# Error regenerating repository map: {e}\n"
+                # Fall through to use potentially stale self.last_repomap_content
+
+            # Add the (potentially updated) repomap content
+            details += "# Repository Map (Refreshed)\n"
+            # Ensure repomap content is also in a code block for clarity
+            details += f"```\n{self.last_repomap_content}\n```\n\n"
+        else:
+            # If repomap hasn't been generated yet, show basic file listing
+            details += "# Files in Session Directory (use list_repomap tool for details)\n"
+            try:
+                files = []
+                # List only top-level files for brevity
+                for f in os.listdir(self.session_path):
+                    full_path = os.path.join(self.session_path, f)
+                    if os.path.isfile(full_path):
+                        # Exclude common hidden/config files from basic list if repomap will cover them
+                        if not f.startswith('.') and not f.endswith(('.log', '.tmp', '.swp')):
+                             files.append(f.replace(os.sep, '/')) # Use POSIX path
+
+                if files:
+                    details += "\n".join(f"- {f}" for f in sorted(files)) + "\n\n"
+                else:
+                    details += "(No relevant files found at top level)\n\n"
+            except Exception as e:
+                details += f"# Error listing files: {str(e)}\n\n"
+
+
+        # --- Other details (Emacs state, etc.) ---
         # TODO: Add other details like open files, running terminals by calling Emacs funcs
         # Example: open_files = get_emacs_func_result("emigo--get-open-files")
         # Example: running_terminals = get_emacs_func_result("emigo--get-running-terminals")
@@ -170,7 +244,24 @@ class Agents:
             content = read_file_content(abs_path)
             # Use POSIX path in the response tag for consistency
             posix_rel_path = rel_path.replace(os.sep, '/')
-            return self._format_tool_result(f"{TOOL_RESULT_SUCCESS}\n<file_content path=\"{posix_rel_path}\">\n{content}\n</file_content>")
+
+            # --- Add file to context after successful read ---
+            # Directly modify the chat_files list via the reference.
+            # Note: This does NOT send a confirmation message back to Emacs,
+            # unlike the previous approach using emigo_instance.add_files_to_context.
+            try:
+                session_files = self.chat_files_ref.setdefault(self.session_path, [])
+                if rel_path not in session_files:
+                    session_files.append(rel_path)
+                    if self.verbose:
+                        print(f"Added '{rel_path}' to internal chat context for session {os.path.basename(self.session_path)}.", file=sys.stderr)
+            except Exception as add_err:
+                # Log error but don't fail the read operation itself
+                print(f"Warning: Failed to add '{rel_path}' to internal context after reading: {add_err}", file=sys.stderr)
+            # ---
+
+            # Return only success message; content will be in environment_details
+            return self._format_tool_result(f"{TOOL_RESULT_SUCCESS}\nFile '{posix_rel_path}' read and added to context.")
         except Exception as e:
             print(f"Error reading file '{rel_path}': {e}", file=sys.stderr)
             return self._format_tool_error(f"Error reading file: {e}")
@@ -312,9 +403,16 @@ class Agents:
             repo_map_content = self.repo_mapper.generate_map(chat_files=chat_files)
             if not repo_map_content:
                 repo_map_content = "(No map content generated)"
-            return self._format_tool_result(f"{TOOL_RESULT_SUCCESS}\n# Repository Map for {self.session_path.replace(os.sep, '/')}\n{repo_map_content}")
+
+            # Store the generated map content for inclusion in environment details
+            self.last_repomap_content = repo_map_content
+
+            # Return only success message; map content will be in environment_details
+            return self._format_tool_result(f"{TOOL_RESULT_SUCCESS}\nRepository map generated for {self.session_path.replace(os.sep, '/')}.")
         except Exception as e:
             print(f"Error generating repomap: {e}", file=sys.stderr)
+            # Clear stored map on error
+            self.last_repomap_content = None
             return self._format_tool_error(f"Error generating repository map: {e}")
 
     def _handle_list_files(self, params: Dict[str, str]) -> str:
@@ -415,41 +513,41 @@ class Agents:
                 print(f"\n--- Agent Turn {turn + 1}/{max_turns} (Session: {os.path.basename(self.session_path)}) ---", file=sys.stderr)
 
                 # --- Build Prompt ---
-                messages = [{"role": "system", "content": system_prompt}]
-                messages.extend(current_history) # Use the history for this run
+                # Start with system prompt and the current interaction history
+                base_messages = [{"role": "system", "content": system_prompt}]
+                base_messages.extend(current_history) # Use the history for this run
 
-                # Add environment details and previous tool result to the *last* user message
+                # Create a temporary list of messages to send, including context
+                messages_to_send = [msg.copy() for msg in base_messages] # Shallow copy is enough
+
+                # Find the last user message *in the temporary list* to append context
                 last_user_message_index = -1
                 try:
                     # Find the index of the last message with role 'user'
-                    last_user_message_index = next(i for i, msg in enumerate(reversed(messages)) if msg["role"] == "user")
-                    last_user_message_index = len(messages) - 1 - last_user_message_index
+                    last_user_message_index = next(i for i, msg in enumerate(reversed(messages_to_send)) if msg["role"] == "user")
+                    last_user_message_index = len(messages_to_send) - 1 - last_user_message_index
                 except StopIteration:
                      print("Error: No user message found in history to append context to.", file=sys.stderr)
-                     # If this happens, something is wrong with history management
                      eval_in_emacs("emigo--flush-buffer", self.session_path, "[Internal Error: History state invalid]", "error")
                      break # Exit loop
 
-                context_to_add = ""
-                if self.current_tool_result:
-                    # Append the result from the *previous* turn
-                    context_to_add += f"\n\n{self.current_tool_result}"
-                    self.current_tool_result = None # Consume the result
-
-                # Add environment details (repo map, etc.)
-                # TODO: Consider adding this only on the first turn or when context changes significantly?
+                # Prepare context to add (only environment details)
+                # The previous tool result is already the last user message in current_history / base_messages
                 environment_details = self._get_environment_details()
-                context_to_add += f"\n\n{environment_details}"
+                context_to_add = f"\n\n{environment_details}" # Start with newline for separation
 
-                # Modify the content of the last user message in the *local* messages list
-                messages[last_user_message_index]["content"] += context_to_add
+                # Modify the content of the last user message *only in the temporary list*
+                messages_to_send[last_user_message_index]["content"] += context_to_add
+
+                # Consume the tool result flag *after* it has been added to history in the previous turn
+                self.current_tool_result = None
 
                 # --- Send to LLM (Streaming) ---
                 full_response = ""
                 eval_in_emacs("emigo--flush-buffer", self.session_path, "\nAssistant:\n", "llm", True) # Signal start
                 try:
-                    # Use the locally built messages list
-                    response_stream = self.llm_client.send(messages, stream=True)
+                    # Send the temporary list with context included
+                    response_stream = self.llm_client.send(messages_to_send, stream=True)
                     for chunk in response_stream:
                         eval_in_emacs("emigo--flush-buffer", self.session_path, str(chunk), "llm", False)
                         full_response += chunk
