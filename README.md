@@ -22,37 +22,33 @@ Emigo is under active development. Expect frequent updates, potential breaking c
     ```bash
     pip install -r requirements.txt
     ```
-3.  **Clone the Repository:**
-    ```bash
-    git clone https://github.com/MatthewZMD/emigo.git /path/to/emigo
-    ```
-4.  **Configure Emacs:** Add the following to your `init.el` or `~/.emacs` file, adjusting the `load-path`:
+3.  **Install with straight.el:** Add to your Emacs config:
 
     ```emacs-lisp
-    ;; Adjust the path to where you cloned the repository
-    (add-to-list 'load-path "/path/to/emigo")
+    (use-package emigo
+      :straight (:host github :repo "MatthewZMD/emigo")
+      :config
+      (emigo-enable) ;; Starts the background process automatically
+      :custom
+      ;; Example using OpenRouter with Claude 3.7 Sonnet
+      (emigo-model "openrouter/anthropic/claude-3.7-sonnet")
+      (emigo-base-url "https://openrouter.ai/api/v1")
+      ;; Securely load your API key (replace with your preferred method)
+      (emigo-api-key (emigo-read-file-content "~/.config/openrouter/key.txt")))
 
-    (require 'emigo)
-    (emigo-enable) ;; Starts the background process automatically
-
-    ;; --- Configure your LLM Provider ---
-    ;; Example using OpenRouter with Claude 3.7 Sonnet
-    (setq emigo-model "openrouter/anthropic/claude-3.7-sonnet")
-    (setq emigo-base-url "https://openrouter.ai/api/v1")
-    ;; Securely load your API key (replace with your preferred method)
-    (setq emigo-api-key (emigo-read-file-content "~/.config/openrouter/key.txt"))
-    ;; Ensure the key file exists and contains only your API key
+    ;; With the current limitations, I do not recommend using a thinking model
+    ;; by default to save tokens
 
     ;; --- Other LLM Examples (adjust model, base_url, api_key) ---
-    ;; OpenAI:
-    ;; (setq emigo-model "gpt-4o")
-    ;; (setq emigo-base-url nil) ; Uses default OpenAI endpoint
-    ;; (setq emigo-api-key (getenv "OPENAI_API_KEY")) ; Or use emigo-read-file-content
-
     ;; Anthropic:
     ;; (setq emigo-model "claude-3-5-sonnet-20240620")
     ;; (setq emigo-base-url nil) ; Uses default Anthropic endpoint
     ;; (setq emigo-api-key (getenv "ANTHROPIC_API_KEY"))
+
+    ;; OpenAI:
+    ;; (setq emigo-model "gpt-4o")
+    ;; (setq emigo-base-url nil) ; Uses default OpenAI endpoint
+    ;; (setq emigo-api-key (getenv "OPENAI_API_KEY")) ; Or use emigo-read-file-content
     ```
 
 ## Usage
