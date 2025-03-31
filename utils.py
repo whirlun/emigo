@@ -229,6 +229,27 @@ def get_os_name():
 def parse_json_content(content):
     return json_parser.loads(content)
 
+def read_file_content(abs_path: str) -> str:
+    """Reads the content of a file."""
+    # Basic implementation, consider adding error handling for encoding etc.
+    # like in repomapper.read_text
+    try:
+        # Try UTF-8 first, the most common encoding
+        with open(abs_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except UnicodeDecodeError:
+        # If UTF-8 fails, try the system's default encoding or latin-1 as fallback
+        try:
+            with open(abs_path, 'r', encoding=sys.getdefaultencoding()) as f:
+                return f.read()
+        except UnicodeDecodeError:
+            # As a last resort, try latin-1, which rarely fails but might misinterpret chars
+            with open(abs_path, 'r', encoding='latin-1') as f:
+                return f.read()
+    except Exception as e:
+        print(f"Error reading file {abs_path}: {e}", file=sys.stderr)
+        raise # Re-raise for the agent handler to catch and format
+
 def touch(path):
     import os
 

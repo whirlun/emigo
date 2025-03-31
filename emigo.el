@@ -9,7 +9,7 @@
 ;; Copyright (C) 2025, Emigo, all rights reserved.
 ;; Created: 2025-03-29
 ;; Version: 0.5
-;; Last-Updated: Sun Mar 30 23:29:03 2025 (-0400)
+;; Last-Updated: Mon Mar 31 02:50:25 2025 (-0400)
 ;;           By: Mingde (Matthew) Zeng
 ;; Package-Requires: ((emacs "26.1") (transient "0.3.0") (compat "30.0.2.0"))
 ;; Keywords: ai emacs llm aider ai-pair-programming tools
@@ -72,7 +72,17 @@
              (emigo-epc-define-method mngr 'eval-in-emacs 'emigo--eval-in-emacs-func)
              (emigo-epc-define-method mngr 'get-emacs-var 'emigo--get-emacs-var-func)
              (emigo-epc-define-method mngr 'get-emacs-vars 'emigo--get-emacs-vars-func)
-             (emigo-epc-define-method mngr 'get-user-emacs-directory 'emigo--user-emacs-directory))))
+             (emigo-epc-define-method mngr 'get-user-emacs-directory 'emigo--user-emacs-directory)
+             (emigo-epc-define-method mngr 'request-tool-approval-sync 'emigo--request-tool-approval-sync)
+             (emigo-epc-define-method mngr 'ask-user-sync 'emigo--ask-user-sync)
+             (emigo-epc-define-method mngr 'signal-completion 'emigo--signal-completion)
+             (emigo-epc-define-method mngr 'apply-diff-sync 'emigo--apply-diff-sync)
+             (emigo-epc-define-method mngr 'file-written-externally 'emigo--file-written-externally)
+             (emigo-epc-define-method mngr 'agent-finished 'emigo--agent-finished)
+             (emigo-epc-define-method mngr 'execute-command-sync 'emigo--execute-command-sync)
+             (emigo-epc-define-method mngr 'read-file-content-sync 'emigo--read-file-content-sync)
+             (emigo-epc-define-method mngr 'list-files-sync 'emigo--list-files-sync)
+             (emigo-epc-define-method mngr 'flush-buffer 'emigo-flush-buffer))))
     (if emigo-server
         (setq emigo-server-port (process-contact emigo-server :service))
       (error "[Emigo] emigo-server failed to start")))
@@ -180,11 +190,11 @@ Searches parent directories for existing sessions."
 
 (defcustom emigo-enable-debug nil
   "If you got segfault error, please turn this option.
-Then Emigo will start by gdb, please send new issue with `*emigo*' buffer content when next crash."
+Then Emigo will start by gdb, please send new issue with `emigo-name' buffer content when next crash."
   :type 'boolean)
 
 (defcustom emigo-enable-log nil
-  "Enable this option to print log message in `*emigo*' buffer, default only print message header."
+  "Enable this option to print log message in `emigo-name' buffer, default only print message header."
   :type 'boolean)
 
 (defcustom emigo-enable-profile nil
@@ -293,7 +303,6 @@ Then Emigo will start by gdb, please send new issue with `*emigo*' buffer conten
     (emigo-call-async "cleanup")
     ;; Delete Emigo server process.
     (emigo-epc-stop-epc emigo-epc-process)
-    ;; Kill *emigo* buffer.
     (when (get-buffer emigo-name)
       (kill-buffer emigo-name))
     (setq emigo-epc-process nil)
@@ -563,7 +572,7 @@ Otherwise return nil."
       (delete-region (point) (point-max))
       (emigo-call-async "emigo_session" emigo-session-path prompt))))
 
-(defun emigo-flush-buffer (session-path content role &rest init)
+(defun emigo--flush-buffer (session-path content role &rest init)
   "Flush CONTENT to the Emigo buffer associated with SESSION-PATH."
   (let ((buffer-name (emigo-get-buffer-name nil session-path))
         (buffer (get-buffer (emigo-get-buffer-name t session-path)))) ;; Find existing buffer
@@ -572,26 +581,31 @@ Otherwise return nil."
       (cl-return-from emigo-flush-buffer))
 
     (with-current-buffer buffer
-      (when init
-        (goto-char (point-min))
-        (insert (propertize (concat "\n\n" emigo-prompt-string) 'face font-lock-keyword-face)))
-
       (save-excursion
         (let ((inhibit-read-only t)) ;; Allow modification even if buffer is read-only
-          (goto-char (point-max))
-          (search-backward-regexp (concat "^" emigo-prompt-string) nil t)
-          (forward-line -2)
-          (goto-char (line-end-position))
+          ;; If this is the first message and buffer is empty, add the prompt at the end
+          (when (and init (= (buffer-size) 0))
+            (goto-char (point-max))
+            (insert (propertize (concat "\n\n" emigo-prompt-string) 'face font-lock-keyword-face))
+            (goto-char (point-max))) ;; Move cursor to end after adding first prompt
 
-          (if (equal role "user")
-              (insert (propertize content 'face font-lock-keyword-face))
-            (insert content)
-            (setq-local emigo--llm-output (concat emigo--llm-output content)))
+          ;; For all content, append at the appropriate position
+          (goto-char (point-max))
+          (when (search-backward-regexp (concat "^" emigo-prompt-string) nil t)
+            (forward-line -2)
+            (goto-char (line-end-position)))
+
+          ;; Ensure content is a string before inserting
+          (let ((content (if (stringp content) content "")))
+            (if (equal role "user")
+                (insert (propertize content 'face font-lock-keyword-face))
+              (insert content)
+              (setq-local emigo--llm-output (concat emigo--llm-output content))))
 
           (goto-char (point-max))
-          (search-backward-regexp (concat "^" emigo-prompt-string) nil t)
-          (forward-char (1- (length emigo-prompt-string)))
-          (emigo-lock-region (point-min) (point))
+          (when (search-backward-regexp (concat "^" emigo-prompt-string) nil t)
+            (forward-char (1- (length emigo-prompt-string)))
+            (emigo-lock-region (point-min) (point)))
           )))))
 
 (defun emigo-lock-region (beg end)
@@ -670,6 +684,194 @@ This advice can make `other-window' skip `emigo' dedicated window."
           ;; Message will be sent from Python side upon successful removal
           )))))
 
+;; --- Tool Execution & Interaction Handlers (Called from Python) ---
+
+(defun emigo--request-tool-approval-sync (session-path tool-name params-plist-string)
+  "Ask the user for approval to execute TOOL-NAME with PARAMS-PLIST-STRING.
+Return t if approved, nil otherwise. Called synchronously by the agent.
+PARAMS-PLIST-STRING is expected to be a string representation of an elisp plist, e.g. \"(:path \\\"foo.py\\\" :content \\\"bar\\\")\"."
+  (interactive) ;; For testing, remove later if only called programmatically
+  (let* ((params (ignore-errors (read params-plist-string)))
+         (param-alist (when (plistp params) (cl-loop for (key val) on params by #'cddr collect (cons key val))))
+         (prompt-message
+          (format "[Emigo Approval] Allow tool '%s' for session '%s'?\nParams:\n%s\nApprove? (y or n) "
+                  tool-name
+                  (file-name-nondirectory session-path)
+                  (if param-alist
+                      (mapconcat (lambda (pair) (format "- %S: %S" (car pair) (cdr pair))) param-alist "\n")
+                    params-plist-string)))) ;; Show raw string if plist parsing failed
+    (y-or-n-p prompt-message)))
+
+(defun emigo--ask-user-sync (session-path question options-json-string)
+  "Ask the user QUESTION in the context of SESSION-PATH.
+OPTIONS-JSON-STRING is a JSON array string like \"[\\\"Opt1\\\", \\\"Opt2\\\"]\" or \"[]\".
+Returns the user's input string, or nil if cancelled/empty."
+  (interactive) ;; For testing
+  (let* ((options (ignore-errors (json-parse-string options-json-string)))
+         (prompt (format "[Emigo Question] (%s)\n%s\n%sAnswer: "
+                         (file-name-nondirectory session-path)
+                         question
+                         (if (and (listp options) (> (length options) 0))
+                             (concat (mapconcat (lambda (opt) (format "- %s" opt)) options "\n") "\n")
+                           "")))
+         (answer
+          (if (and (listp options) (> (length options) 0))
+              ;; Use completing-read if options are provided
+              (completing-read prompt options nil t nil nil)
+            ;; Otherwise, use read-string
+            (read-string prompt))))
+    (if (string-empty-p answer) nil answer)))
+
+(defun emigo--signal-completion (session-path result-text command-string)
+  "Signal that the agent has attempted completion for SESSION-PATH.
+Display RESULT-TEXT and optionally offer to run COMMAND-STRING."
+  (let ((buffer (get-buffer (emigo-get-buffer-name t session-path))))
+    (when buffer
+      (with-current-buffer buffer
+        (let ((inhibit-read-only t))
+          (goto-char (point-max))
+          ;; Ensure we are not inside the prompt
+          (unless (looking-back emigo-prompt-string (line-beginning-position))
+            (insert "\n"))
+          (insert (propertize "\n--- Completion Attempt ---\n" 'face 'font-lock-comment-face))
+          (insert result-text)
+          (insert (propertize "\n--- End Completion ---\n" 'face 'font-lock-comment-face)))
+        (message "[Emigo] Task completed by agent for session: %s" (file-name-nondirectory session-path))
+        (when (and command-string (not (string-empty-p command-string)))
+          (if (y-or-n-p (format "Run demonstration command? `%s`" command-string))
+              (emigo--execute-command-sync session-path command-string))))))
+  nil) ;; Return nil to python
+
+(defun emigo--apply-diff-sync (session-path abs-path diff-string)
+  "Apply the SEARCH/REPLACE blocks in DIFF-STRING to the file at ABS-PATH.
+SESSION-PATH is the project root path.
+Returns '(:final_content \"...\") on success or '(:error \"...\") on failure.
+Handles file reading, sequential SEARCH/REPLACE application, and writing."
+  (condition-case-unless-debug err
+      (let* ((original-content (with-temp-buffer (insert-file-contents abs-path) (buffer-string)))
+             (current-content original-content)
+             (diff-blocks (seq-filter (lambda (s) (and (stringp s) (> (length s) 0)) (split-string diff-string "````" t))))
+             (offset 0) ;; Track position in the *current* content for searching
+             (applied-count 0))
+
+        (unless (file-writable-p abs-path)
+          (error "File is not writable: %s" abs-path))
+
+        (dolist (block diff-blocks)
+          (let ((search-marker "<<<<<<< SEARCH\n")
+                (divider-marker "\n=======\n")
+                (replace-marker "\n>>>>>>> REPLACE"))
+            (unless (and (string-match-p (regexp-quote search-marker) block)
+                         (string-match-p (regexp-quote divider-marker) block)
+                         (string-match-p (regexp-quote replace-marker) block))
+              (error "Malformed SEARCH/REPLACE block: %s" (substring block 0 (min 50 (length block)))))
+
+            (let* ((search-start (+ (string-match (regexp-quote search-marker) block) (length search-marker)))
+                   (divider-start (string-match (regexp-quote divider-marker) block))
+                   (replace-start (+ divider-start (length divider-marker)))
+                   (replace-end (string-match (regexp-quote replace-marker) block))
+                   (search-text (substring block search-start divider-start))
+                   (replace-text (substring block replace-start replace-end))
+                   (found-pos (string-match (regexp-quote search-text) current-content offset)))
+
+              (unless found-pos
+                ;; Error: Search text not found *after* previous replacements
+                (error "SEARCH block not found starting from offset %d:\n%s" offset search-text))
+
+              ;; Perform replacement
+              (setq current-content (replace-match replace-text t t current-content 0)) ;; Replace only first match from found-pos onwards? No, replace first match globally. Let's stick to first match globally for simplicity like Cline.
+              ;; Update offset for next search *based on the length change*
+              ;; This is tricky. Let's restart search from beginning each time for simplicity, though less efficient.
+              ;; (setq offset (+ found-pos (length replace-text)))
+              (setq offset 0) ;; Restart search from beginning
+              (cl-incf applied-count))))
+
+        ;; Write the final modified content back to the file
+        (with-temp-file abs-path
+          (insert current-content))
+
+        ;; Inform Emacs about the change (e.g., revert buffer if visited)
+        (emigo--file-written-externally abs-path)
+
+        ;; Read back potentially auto-formatted content
+        (let ((final-content (emigo--read-file-content-sync abs-path)))
+          `(:final_content ,final-content))) ;; Success
+
+    ;; Error handling
+    (`(:error ,(format "Error applying diff to %s: %s" (file-name-nondirectory abs-path) (error-message-string err))))))
+
+
+(defun emigo--file-written-externally (abs-path)
+  "Inform Emacs that the file at ABS-PATH was modified externally.
+If the file is visited in a buffer, offer to revert it."
+  (let ((buffer (find-buffer-visiting abs-path)))
+    (when (and buffer (buffer-modified-p buffer))
+      ;; If buffer is modified, ask user before reverting
+      (when (y-or-n-p (format "File %s changed on disk; revert buffer?" (buffer-name buffer)))
+        (with-current-buffer buffer
+          (revert-buffer :ignore-auto :noconfirm))))
+    (when (and buffer (not (buffer-modified-p buffer)))
+      ;; If buffer is not modified, revert automatically
+       (with-current-buffer buffer
+          (revert-buffer :ignore-auto :noconfirm)))))
+
+(defun emigo--agent-finished (session-path)
+  "Callback function when the agent finishes its interaction for SESSION-PATH."
+  ;; TODO: Maybe update a mode-line indicator?
+  (message "[Emigo] Agent finished for session: %s" (file-name-nondirectory session-path))
+  nil)
+
+(defun emigo--execute-command-sync (session-path command-string)
+  "Execute COMMAND-STRING synchronously in SESSION-PATH and return its output.
+Handles potential errors and captures stdout/stderr."
+  (unless (file-directory-p session-path)
+    (error "Invalid session path for command execution: %s" session-path))
+  (let ((default-directory session-path) ;; Execute in the session path
+        (output-buffer (generate-new-buffer "*emigo-cmd-output*"))
+        (error-output "")
+        (exit-code nil))
+    (unwind-protect
+        (progn
+          ;; Use call-process-shell-command to capture output
+          (setq exit-code (call-process-shell-command command-string nil output-buffer t))
+          (with-current-buffer output-buffer
+            (buffer-string)))
+      ;; Cleanup: kill the temporary buffer
+      (when (buffer-live-p output-buffer)
+        (kill-buffer output-buffer)))
+    ;; Check exit code - simplistic error handling for now
+    (unless (eq exit-code 0)
+      (error "Command failed with exit code %s: %s" exit-code command-string))
+    ;; Return the captured output (already done by progn)
+    ))
+
+(defun emigo--read-file-content-sync (abs-path)
+  "Read and return the content of the file at ABS-PATH."
+  (unless (file-readable-p abs-path)
+    (error "File not readable: %s" abs-path))
+  (with-temp-buffer
+    (insert-file-contents abs-path)
+    (buffer-string)))
+
+(defun emigo--list-files-sync (abs-path recursive-p)
+  "List files in ABS-PATH, optionally RECURSIVE-P. Returns a newline-separated string."
+  (unless (file-directory-p abs-path)
+    (error "Not a directory: %s" abs-path))
+  (let ((files (if recursive-p
+                   ;; directory-files-recursively needs careful handling of args
+                   ;; Let's use find-lisp-find-files for simplicity if available,
+                   ;; otherwise basic directory-files
+                   (if (fboundp 'find-lisp-find-files) ;; Check if find-lisp is available
+                       (find-lisp-find-files abs-path ".") ;; Simple recursive find
+                     (directory-files abs-path t nil t)) ;; Basic recursive, might include ., ..
+                 (directory-files abs-path t)))) ;; Non-recursive
+    ;; Filter out . and .. if present from basic directory-files
+    (setq files (seq-remove (lambda (f) (member (file-name-nondirectory f) '("." ".."))) files))
+    ;; Return relative paths for consistency? No, agent expects paths relative to CWD.
+    ;; Let Python handle making them relative if needed. Return full paths for now.
+    (mapconcat #'identity files "\n")))
+
+
 (defun emigo-list-context-files ()
   "List the files currently in the Emigo chat context for the current project."
   (interactive)
@@ -692,6 +894,14 @@ This advice can make `other-window' skip `emigo' dedicated window."
                      emigo-session-path
                      (mapconcat #'identity chat-files ", "))
           (message "[Emigo] No files currently in chat context for session: %s" emigo-session-path))))))
+
+(defun emigo-show-proc-buffer ()
+  "Open and switch to the Emigo process buffer `emigo-name'."
+  (interactive)
+  (let ((buf (get-buffer emigo-name)))
+    (if buf
+        (switch-to-buffer buf)
+      (message "No Emigo process buffer found"))))
 
 (provide 'emigo)
 

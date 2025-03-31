@@ -568,8 +568,10 @@ This variable is for debug purpose.")
                                       (lambda (xx) (emigo-epc-manager-send mngr 'return uid xx))))
                (t (emigo-epc-manager-send mngr 'return uid ret))))
           (error
-           (emigo-epc-log "ERROR : %S" err)
-           (emigo-epc-manager-send mngr 'return-error uid err))))))))
+           ;; Include method name and args in error for debugging
+           (let ((err-msg (format "FAILED in %s: %S with ERROR: %S" name args err)))
+             (emigo-epc-log err-msg)
+             (emigo-epc-manager-send mngr 'return-error uid err-msg)))))))))
 
 (defun emigo-epc-manager-remove-session (mngr uid)
   "[internal] Remove a session from the epc manager object."
@@ -593,14 +595,18 @@ This variable is for debug purpose.")
 
 (defun emigo-epc-handler-return-error (mngr uid args)
   "[internal] low-level message handler for application errors."
-  (let ((pair (assq uid (emigo-epc-manager-sessions mngr))))
+  (let ((pair (assq uid (emigo-epc-manager-sessions mngr)))
     (cond
      (pair
       (emigo-epc-log "RET-ERR: id:%s [%S]" uid args)
       (emigo-epc-manager-remove-session mngr uid)
-      (emigo-deferred-errorback (cdr pair) (format "%S" args)))
+      (let* ((err-str (format "%S" args))
+        ;; Add context about the failed call if available
+        (when (and (listp args) (eq (car args) 'error))
+          (setq err-str (format "EPC call failed: %S" args)))
+        (emigo-deferred-errorback (cdr pair) err-str))))
      (t                                 ; error
-      (emigo-epc-log "RET-ERR: NOT FOUND: id:%s [%S]" uid args)))))
+      (emigo-epc-log "RET-ERR: NOT FOUND: id:%s [%S]" uid args))))))
 
 (defun emigo-epc-handler-epc-error (mngr uid args)
   "[internal] low-level message handler for epc errors."
