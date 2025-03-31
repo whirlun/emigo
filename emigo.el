@@ -9,7 +9,7 @@
 ;; Copyright (C) 2025, Emigo, all rights reserved.
 ;; Created: 2025-03-29
 ;; Version: 0.5
-;; Last-Updated: Sun Mar 30 02:52:04 2025 (-0400)
+;; Last-Updated: Sun Mar 30 21:53:18 2025 (-0400)
 ;;           By: Mingde (Matthew) Zeng
 ;; Package-Requires: ((emacs "26.1") (transient "0.3.0") (compat "30.0.2.0"))
 ;; Keywords: ai emacs llm aider ai-pair-programming tools
@@ -513,6 +513,7 @@ Otherwise return nil."
     (define-key map (kbd "C-c C-r") #'emigo-restart-process)
     (define-key map (kbd "C-c C-f") #'emigo-remove-file-from-context)
     (define-key map (kbd "C-c C-l") #'emigo-list-context-files)
+    (define-key map (kbd "S-<return>") #'emigo-send-newline)
     map)
   "Keymap used by `emigo-mode'.")
 
@@ -524,6 +525,11 @@ Otherwise return nil."
   (setq mode-name "emigo")
   (use-local-map emigo-mode-map)
   (run-hooks 'emigo-mode-hook))
+
+(defun emigo-send-newline ()
+  "Insert a newline character at point."
+  (interactive)
+  (insert "\n"))
 
 (defun emigo-beginning-of-line ()
   "Move to the beginning of the current line or the prompt position."
