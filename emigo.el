@@ -750,7 +750,10 @@ Handles file reading, sequential SEARCH/REPLACE application, and writing."
   (condition-case-unless-debug err
       (let* ((original-content (with-temp-buffer (insert-file-contents abs-path) (buffer-string)))
              (current-content original-content)
-             (diff-blocks (seq-filter (lambda (s) (and (stringp s) (> (length s) 0)) (split-string diff-string "````" t))))
+             ;; Split the diff string by the fence, omitting empty parts
+             (raw-blocks (split-string diff-string "````" t))
+             ;; Filter out any blocks that might be just whitespace
+             (diff-blocks (seq-filter (lambda (s) (not (string-blank-p s))) raw-blocks))
              (offset 0) ;; Track position in the *current* content for searching
              (applied-count 0))
 

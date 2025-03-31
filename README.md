@@ -2,7 +2,7 @@
 
 Emigo brings AI-powered development to Emacs. If you're missing Cursor but prefer living in Emacs, Emigo provides similar AI capabilities while staying true to Emacs workflows.
 
-## WARN: ACTIVE EARLY-STAGE WORK-IN-PROGRESS, DO NOT EXPECT TO WORK
+## Note: This is an active development project on a daily basis. Expect breaking changes and instability as features are being developed. Contributions and feedback are welcome!
 
 ## Installation
 1. Install Emacs 28 or higher version

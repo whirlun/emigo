@@ -245,7 +245,8 @@ class Agents:
                          f"<file_content path=\"{posix_rel_path}\">\n{original_content}\n</file_content>\n\n"
                          f"Please use read_file to get the latest content and try the edit again."
                      )
-                 elif status == ':final_content' and len(result) > 1:
+                 # Compare the string representation of the status symbol
+                 elif str(status) == ':final_content' and len(result) > 1:
                      # Success, Emacs returned the final content
                      final_content = result[1]
                      return self._format_tool_result(
