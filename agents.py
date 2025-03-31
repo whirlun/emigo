@@ -539,7 +539,9 @@ class Agents:
                 # --- Build Prompt ---
                 # Start with system prompt and the *current* persistent history
                 base_messages = [{"role": "system", "content": system_prompt}]
-                base_messages.extend(self.llm_client.get_history()) # Get latest history
+                # Extract only message dicts from history tuples
+                history_dicts = [msg_dict for _, msg_dict in self.llm_client.get_history()]
+                base_messages.extend(history_dicts) # Get latest history dictionaries
 
                 # Create a temporary list of messages to send, including context
                 messages_to_send = [msg.copy() for msg in base_messages] # Shallow copy is enough

@@ -9,7 +9,7 @@
 ;; Copyright (C) 2025, Emigo, all rights reserved.
 ;; Created: 2025-03-29
 ;; Version: 0.5
-;; Last-Updated: Mon Mar 31 15:31:36 2025 (-0400)
+;; Last-Updated: Mon Mar 31 16:18:05 2025 (-0400)
 ;;           By: Mingde (Matthew) Zeng
 ;; Package-Requires: ((emacs "26.1") (transient "0.3.0") (compat "30.0.2.0"))
 ;; Keywords: ai emacs llm aider ai-pair-programming tools
@@ -82,7 +82,9 @@
              (emigo-epc-define-method mngr 'execute-command-sync 'emigo--execute-command-sync)
              (emigo-epc-define-method mngr 'read-file-content-sync 'emigo--read-file-content-sync)
              (emigo-epc-define-method mngr 'list-files-sync 'emigo--list-files-sync)
-             (emigo-epc-define-method mngr 'flush-buffer 'emigo-flush-buffer))))
+             (emigo-epc-define-method mngr 'flush-buffer 'emigo-flush-buffer)
+             ;; Register the new history retrieval function
+             (emigo-epc-define-method mngr 'get_history 'emigo--get-llm-history))))
     (if emigo-server
         (setq emigo-server-port (process-contact emigo-server :service))
       (error "[Emigo] emigo-server failed to start")))
@@ -173,10 +175,8 @@ Searches parent directories for existing sessions."
 (defvar-local emigo--llm-output "" ;; Buffer-local LLM output accumulator
   "Accumulates the LLM output stream for the current interaction.")
 
-(defvar-local emigo--chat-history nil
-  "List of (timestamp . content) pairs for the chat history.")
-
 ;; Removed emigo-project-root buffer-local variable
+;; Removed buffer-local emigo--chat-history (history managed in Python)
 
 (defvar emigo-epc-process nil)
 
@@ -531,6 +531,7 @@ Otherwise return nil."
     (define-key map (kbd "C-c C-f") #'emigo-remove-file-from-context)
     (define-key map (kbd "C-c C-l") #'emigo-list-context-files)
     (define-key map (kbd "C-c C-y") #'emigo-clear-history)
+    (define-key map (kbd "C-c C-h") #'emigo-show-history)
     (define-key map (kbd "S-<return>") #'emigo-send-newline)
     map)
   "Keymap used by `emigo-mode'.")
@@ -605,11 +606,10 @@ Otherwise return nil."
             (if (equal role "user")
                 (insert (propertize content 'face font-lock-keyword-face))
               (insert content)
-              (setq-local emigo--llm-output (concat emigo--llm-output content)))
+              ;; Accumulate LLM output locally for potential use (e.g., copying)
+              (setq-local emigo--llm-output (concat emigo--llm-output content))))
 
-            ;; Record in history unless it's an error message or empty
-            (unless (or (equal role "error") (string-empty-p content))
-              (push (cons (current-time) content) emigo--chat-history)))
+          ;; History is managed on the Python side
 
           (goto-char (point-max))
           (when (search-backward-regexp (concat "^" emigo-prompt-string) nil t)
@@ -890,14 +890,25 @@ Handles potential errors and captures stdout/stderr."
     ;; Let Python handle making them relative if needed. Return full paths for now.
     (mapconcat #'identity files "\n")))
 
+(defun emigo--get-llm-history (session-path)
+  "Wrapper function called by Python EPC to get LLM history.
+This function is needed for EPC registration but the actual logic
+is handled by `emigo-call--sync \"get_history\" session-path`."
+  ;; This function itself doesn't need to do anything complex,
+  ;; as the call originates from Elisp (`emigo-show-history`)
+  ;; using `emigo-call--sync`. We just need a target for EPC registration.
+  ;; The actual retrieval happens in the Python method called by sync.
+  ;; Returning nil here as the sync call gets the value directly.
+  nil)
+
 (defun emigo--clear-local-buffer (session-path)
   "Clear the local Emacs buffer content and history for SESSION-PATH."
   (let ((buffer (get-buffer (emigo-get-buffer-name t session-path))))
     (when buffer
       (with-current-buffer buffer
-        ;; Clear local buffer history variable
+        ;; Clear local buffer output accumulator
         (setq-local emigo--llm-output "")
-        (setq-local emigo--chat-history nil)
+        ;; History is managed on the Python side, no local history to clear
         ;; Erase buffer content and reset prompt
         (let ((inhibit-read-only t))
           (erase-buffer)
@@ -925,6 +936,48 @@ Handles potential errors and captures stdout/stderr."
       (if (emigo-call--sync "clear_history" emigo-session-path)
           (message "Cleared history for session: %s" (file-name-nondirectory emigo-session-path))
         (message "Failed to clear history for session: %s" (file-name-nondirectory emigo-session-path))))))
+
+(defun emigo-show-history ()
+  "Display the chat history for the current Emigo session in a new Org buffer."
+  (interactive)
+  (unless (emigo--is-emigo-buffer-p)
+    (error "Not in an Emigo buffer"))
+
+  (let* ((history-buffer-name (format "*emigo-history:%s*" (file-name-nondirectory emigo-session-path)))
+         (buf (get-buffer-create history-buffer-name))
+         ;; Fetch history from Python side
+         (history (emigo-call--sync "get_history" emigo-session-path)))
+
+    ;; Check if history is a list (basic validation)
+    (unless (or history (listp history))
+       (message "Received invalid history format from Python for session: %s" emigo-session-path)
+       (when (get-buffer buf) (kill-buffer buf))
+       (cl-return-from emigo-show-history))
+
+    (with-current-buffer buf
+      (let ((inhibit-read-only t)) ;; Allow modification during setup
+        (erase-buffer)
+        (org-mode)
+        (display-line-numbers-mode 1)
+        (setq-local buffer-read-only t)
+        ;; Wrap kill-this-buffer in an interactive lambda
+        (local-set-key (kbd "q") (lambda () (interactive) (kill-this-buffer)))
+
+        ;; Iterate through history (list of (timestamp plist) lists from Python)
+        (dolist (entry history)
+          (let* ((timestamp-float (car entry)) ;; Timestamp is the first element
+                 (message-plist (cadr entry)) ;; Message plist is the second element
+                 (role (or (plist-get message-plist :role) "unknown"))
+                 (content (or (plist-get message-plist :content) ""))
+                 ;; Format the float timestamp
+                 (timestamp-str (format-time-string "%F %T" timestamp-float)))
+            ;; Insert Org heading for role/timestamp and source block for content
+            (insert (format "* [%s] %s\n#+BEGIN_SRC %s\n%s\n#+END_SRC\n\n"
+                            timestamp-str ;; Use the formatted timestamp string
+                            (capitalize role) ;; Capitalize role (User, Assistant)
+                            (if (equal role "user") "text" "markdown") ;; Basic language hint
+                            (string-trim content)))))))
+    (switch-to-buffer-other-window buf)))
 
 (defun emigo-list-context-files ()
   "List the files currently in the Emigo chat context for the current project."
@@ -954,7 +1007,7 @@ Handles potential errors and captures stdout/stderr."
   (interactive)
   (let ((buf (get-buffer emigo-name)))
     (if buf
-        (switch-to-buffer buf)
+        (switch-to-buffer-other-window buf)
       (message "No Emigo process buffer found"))))
 
 (provide 'emigo)

@@ -5,12 +5,13 @@ Simplified LLM client using litellm to interact with language models
 and manage chat history.
 """
 
+import datetime # Keep for potential future use, but time.time() is simpler for timestamp
 import importlib
 import os
 import sys
 import time
 import warnings
-from typing import Dict, Iterator, List, Optional, Union
+from typing import Dict, Iterator, List, Optional, Union, Tuple # Added Tuple
 
 # Filter out UserWarning from pydantic used by litellm
 warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
@@ -102,21 +103,25 @@ class LLMClient:
         self.api_key = api_key
         self.base_url = base_url
         self.verbose = verbose
-        self.chat_history: List[Dict] = []
+        # Store history as list of (timestamp, message_dict) tuples
+        self.chat_history: List[Tuple[float, Dict]] = []
 
-    def get_history(self) -> List[Dict]:
-        """Returns the current chat history."""
-        return list(self.chat_history) # Return a copy
+    def get_history(self) -> List[Tuple[float, Dict]]:
+        """Returns the current chat history as a list of (timestamp, message_dict) tuples."""
+        return self.chat_history
 
     def set_history(self, history: List[Dict]):
-        """Sets the chat history."""
-        self.chat_history = list(history) # Store a copy
+        """Sets the chat history from a list of message dictionaries, adding timestamps."""
+        current_time = time.time()
+        # Add timestamp to each message when setting the history
+        self.chat_history = [(current_time, dict(msg)) for msg in history] # Store copies of messages
 
     def append_history(self, message: Dict):
-        """Appends a single message to the chat history."""
+        """Appends a single message dictionary with a timestamp to the chat history."""
         if "role" not in message or "content" not in message:
             raise ValueError("Message must have 'role' and 'content' keys")
-        self.chat_history.append(message)
+        # Append a tuple: (current_timestamp, message_copy)
+        self.chat_history.append((time.time(), dict(message))) # Store a copy
 
     def clear_history(self):
         """Clears the chat history."""

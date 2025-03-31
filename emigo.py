@@ -23,7 +23,7 @@ import os
 import sys
 import threading
 import traceback
-from typing import Dict, List, Optional # Added Optional
+from typing import Dict, List, Optional, Tuple
 
 from epc.server import ThreadingEPCServer
 from llm import LLMClient
@@ -252,6 +252,15 @@ class Emigo:
             eval_in_emacs("emigo--clear-local-buffer", session_path)
             return True
         return False
+
+    def get_history(self, session_path: str) -> Optional[List[Tuple[float, Dict]]]:
+        """Retrieves the chat history as list of (timestamp, message_dict) tuples."""
+        agent_instance = self.agent_dict.get(session_path)
+        if agent_instance and agent_instance.llm_client:
+            return agent_instance.llm_client.get_history()
+        else:
+            print(f"No agent or LLM client found for session {session_path} to retrieve history.", file=sys.stderr)
+            return None # Return None if agent doesn't exist
 
 if __name__ == "__main__":
     if len(sys.argv) >= 3:
