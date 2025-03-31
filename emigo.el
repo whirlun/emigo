@@ -9,7 +9,7 @@
 ;; Copyright (C) 2025, Emigo, all rights reserved.
 ;; Created: 2025-03-29
 ;; Version: 0.5
-;; Last-Updated: Sun Mar 30 22:29:08 2025 (-0400)
+;; Last-Updated: Sun Mar 30 23:29:03 2025 (-0400)
 ;;           By: Mingde (Matthew) Zeng
 ;; Package-Requires: ((emacs "26.1") (transient "0.3.0") (compat "30.0.2.0"))
 ;; Keywords: ai emacs llm aider ai-pair-programming tools
@@ -588,67 +588,11 @@ Otherwise return nil."
             (insert content)
             (setq-local emigo--llm-output (concat emigo--llm-output content)))
 
-          (when (equal role "llm")
-            (let* ((llm-start-pos (save-excursion
-                                    (goto-char (point-max))
-                                    (search-backward-regexp "\nAssistant:\n" nil t)))
-                   (diff-start-pos (save-excursion
-                                     (goto-char (point-max))
-                                     (search-backward-regexp "^```diff\n---" llm-start-pos t)))
-                   (diff-end-pos (save-excursion
-                                   (goto-char (point-max))
-                                   (search-backward-regexp "^```" llm-start-pos t))))
-              (when (and diff-start-pos diff-end-pos
-                         (< diff-start-pos diff-end-pos))
-                (emigo-highlight-diff-region diff-start-pos diff-end-pos)
-                (emigo-toggle-truncate-in-region diff-start-pos diff-end-pos)
-                )))
-
           (goto-char (point-max))
           (search-backward-regexp (concat "^" emigo-prompt-string) nil t)
           (forward-char (1- (length emigo-prompt-string)))
           (emigo-lock-region (point-min) (point))
           )))))
-
-(defun emigo-toggle-truncate-in-region (beg end)
-  (interactive)
-  (save-excursion
-    (save-restriction
-      (narrow-to-region beg end)
-      (setq truncate-lines (not truncate-lines))
-      (redisplay))))
-
-(defun emigo-highlight-diff-region (beg end)
-  "Apply custom syntax highlighting to diff text in the selected region."
-  (interactive)
-  (with-silent-modifications
-    ;; First clear existing highlights
-    (remove-text-properties beg end '(font-lock-face nil))
-    ;; Scan line by line and apply highlighting
-    (save-excursion
-      (goto-char beg)
-      (while (< (point) end)
-        (beginning-of-line)
-        (let ((line-end (min end (line-end-position)))
-              (first-char (char-after)))
-          (cond
-           ;; Added lines (+)
-           ((eq first-char ?+)
-            (add-text-properties (point) line-end
-                                 '(font-lock-face font-lock-keyword-face)))
-           ;; Deleted lines (-)
-           ((eq first-char ?-)
-            (add-text-properties (point) line-end
-                                 '(font-lock-face (:foreground "red"))))
-           ;; Context information lines (@)
-           ((eq first-char ?@)
-            (add-text-properties (point) line-end
-                                 '(font-lock-face (:foreground "cyan" :weight bold))))
-           ;; Index lines, filenames and other metadata
-           ((or (eq first-char ?d) (eq first-char ?i) (looking-at "^index\\|^---\\|^\\+\\+\\+"))
-            (add-text-properties (point) line-end
-                                 '(font-lock-face (:foreground "blue" :weight bold))))))
-        (forward-line 1)))))
 
 (defun emigo-lock-region (beg end)
   "Super-lock the region from BEG to END."
