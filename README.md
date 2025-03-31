@@ -1,6 +1,6 @@
 # Emigo
 
-Emigo brings AI-powered development to Emacs. If you're missing Cursor but prefer living in Emacs, Emigo provides similar AI capabilities while staying true to Emacs workflows.
+Emigo brings AI-powered development to Emacs. If you're missing Cursor but prefer living in Emacs, Emigo provides similar AI capabilities while staying true to Emacs workflows. Inspired by projects like Aider and Cline, Emigo implements **agentic tooluse** to enable powerful AI-assisted development directly within Emacs.
 
 ## Note: This is an active development project on a daily basis. Expect breaking changes and instability as features are being developed. Contributions and feedback are welcome!
 
