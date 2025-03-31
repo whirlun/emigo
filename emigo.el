@@ -9,7 +9,7 @@
 ;; Copyright (C) 2025, Emigo, all rights reserved.
 ;; Created: 2025-03-29
 ;; Version: 0.5
-;; Last-Updated: Mon Mar 31 02:50:25 2025 (-0400)
+;; Last-Updated: Mon Mar 31 03:03:13 2025 (-0400)
 ;;           By: Mingde (Matthew) Zeng
 ;; Package-Requires: ((emacs "26.1") (transient "0.3.0") (compat "30.0.2.0"))
 ;; Keywords: ai emacs llm aider ai-pair-programming tools
@@ -729,18 +729,24 @@ Display RESULT-TEXT and optionally offer to run COMMAND-STRING."
     (when buffer
       (with-current-buffer buffer
         (let ((inhibit-read-only t))
+          ;; Go to the end of the buffer
           (goto-char (point-max))
-          ;; Ensure we are not inside the prompt
-          (unless (looking-back emigo-prompt-string (line-beginning-position))
-            (insert "\n"))
-          (insert (propertize "\n--- Completion Attempt ---\n" 'face 'font-lock-comment-face))
-          (insert result-text)
-          (insert (propertize "\n--- End Completion ---\n" 'face 'font-lock-comment-face)))
+          ;; Search backwards for the last prompt
+          (if (search-backward-regexp (concat "^" (regexp-quote emigo-prompt-string)) nil t)
+              ;; If found, insert before the prompt
+              (progn
+                (insert (propertize "\n--- Completion Attempt ---\n" 'face 'font-lock-comment-face))
+                (insert result-text)
+                (insert (propertize "\n--- End Completion ---\n\n" 'face 'font-lock-comment-face))) ;; Add newline before prompt
+            ;; If no prompt found (shouldn't happen in normal flow), insert at end
+            (goto-char (point-max))
+            (insert (propertize "\n--- Completion Attempt ---\n" 'face 'font-lock-comment-face))
+            (insert result-text)
+            (insert (propertize "\n--- End Completion ---\n" 'face 'font-lock-comment-face)))))
         (message "[Emigo] Task completed by agent for session: %s" (file-name-nondirectory session-path))
         (when (and command-string (not (string-empty-p command-string)))
           (if (y-or-n-p (format "Run demonstration command? `%s`" command-string))
               (emigo--execute-command-sync session-path command-string))))))
-  nil) ;; Return nil to python
 
 (defun emigo--apply-diff-sync (session-path abs-path diff-string)
   "Apply the SEARCH/REPLACE blocks in DIFF-STRING to the file at ABS-PATH.
