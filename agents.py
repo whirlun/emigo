@@ -19,12 +19,14 @@ from system_prompt import (
     TOOL_REPLACE_IN_FILE, TOOL_SEARCH_FILES, TOOL_LIST_FILES,
     TOOL_LIST_REPOMAP, TOOL_ASK_FOLLOWUP_QUESTION, TOOL_ATTEMPT_COMPLETION
 )
+import tiktoken # For token counting in history truncation
+
 from utils import (
     eval_in_emacs, message_emacs, get_command_result, get_os_name,
-    get_emacs_var, get_emacs_vars, read_file_content, # Added read_file_content
-    get_emacs_func_result # Added for potential future use
+    get_emacs_var, get_emacs_vars, read_file_content,
+    get_emacs_func_result
 )
-from config import IGNORED_DIRS # Import centralized list
+from config import IGNORED_DIRS
 
 
 class Agents:
@@ -45,6 +47,14 @@ class Agents:
         self.chat_file_mtimes: Dict[str, float] = {} # Store mtimes {rel_path: mtime}
         self.chat_file_contents: Dict[str, str] = {} # Store content {rel_path: content}
         self.last_repomap_content: Optional[str] = None
+        # History truncation setting
+        self.max_history_messages = 10 # Keep last N messages (user/assistant/tool) + first user msg
+        # Tokenizer for history management (assuming gpt-4o compatible)
+        try:
+            self.tokenizer = tiktoken.get_encoding("cl100k_base")
+        except Exception as e:
+            print(f"Warning: Could not load tiktoken tokenizer 'cl100k_base'. History token counting may be inaccurate. Error: {e}", file=sys.stderr)
+            self.tokenizer = None
 
     def _build_system_prompt(self) -> str:
         """Builds the system prompt, inserting dynamic info."""
@@ -64,75 +74,54 @@ class Agents:
         return prompt
 
     def _get_environment_details(self) -> str:
-        """Fetches environment details: added file contents and repo map."""
+        """Fetches environment details: repo map OR file listing. NO file contents."""
         details = "<environment_details>\n"
         details += f"# Session Directory\n{self.session_path.replace(os.sep, '/')}\n\n" # Use POSIX path
 
         # --- Repository Map / Basic File Listing ---
-        if self.last_repomap_content is not None: # Check if repomap has been generated at least once
-            # Regenerate the map to ensure freshness
-            try:
-                print("Regenerating repository map for environment details...", file=sys.stderr)
-                fresh_repomap_content = self.repo_mapper.generate_map()
-                if not fresh_repomap_content:
-                    fresh_repomap_content = "(No map content generated)"
-                self.last_repomap_content = fresh_repomap_content # Update the cache
-            except Exception as e:
-                print(f"Error regenerating repomap for environment details: {e}", file=sys.stderr)
-                # Keep the old content if regeneration fails, but add an error note
-                details += f"# Error regenerating repository map: {e}\n"
-                # Fall through to use potentially stale self.last_repomap_content
-
-            # Add the (potentially updated) repomap content
+        # Regenerate the map if it exists to ensure freshness, otherwise show structure
+        if self.last_repomap_content is not None:
+            if self.verbose: print("Regenerating repository map for environment details...", file=sys.stderr)
+            fresh_repomap_content = self.repo_mapper.generate_map()
+            if not fresh_repomap_content:
+                fresh_repomap_content = "(No map content generated)"
+            self.last_repomap_content = fresh_repomap_content # Update the cache
             details += "# Repository Map (Refreshed)\n"
-            # Ensure repomap content is also in a code block for clarity
             details += f"```\n{self.last_repomap_content}\n```\n\n"
         else:
             # If repomap hasn't been generated yet, show recursive directory listing
-            details += "# File/Directory Structure (use list_repomap tool for full details)\n"
+            details += "# File/Directory Structure (use list_repomap tool for code summary)\n"
             try:
                 structure_lines = []
-                # Use IGNORED_DIRS from config
                 for root, dirnames, filenames in os.walk(self.session_path, topdown=True):
-                    # Filter ignored directories *before* processing
                     dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS and not d.startswith('.')]
-                    # Filter ignored/hidden files
-                    filenames = [f for f in filenames if not f.startswith('.')] # Basic hidden file filter
+                    filenames = [f for f in filenames if not f.startswith('.')]
 
                     rel_root = os.path.relpath(root, self.session_path)
-                    if rel_root == '.':
-                        rel_root = '' # Avoid './' prefix for root level
-                    else:
-                        rel_root = rel_root.replace(os.sep, '/') + '/' # Use POSIX path and add slash
+                    if rel_root == '.': rel_root = ''
+                    else: rel_root = rel_root.replace(os.sep, '/') + '/'
 
-                    # Calculate indentation level
                     level = rel_root.count('/')
-
-                    # Add current directory to structure (if not root)
                     if rel_root:
-                         indent = '  ' * (level -1) # Indent based on depth
-                         structure_lines.append(f"{indent}- {os.path.basename(rel_root[:-1])}/") # Show dir name
+                         indent = '  ' * (level -1)
+                         structure_lines.append(f"{indent}- {os.path.basename(rel_root[:-1])}/")
 
-                    # Add files in the current directory
                     file_indent = '  ' * level
                     for filename in sorted(filenames):
                         structure_lines.append(f"{file_indent}- {filename}")
 
                 if structure_lines:
-                    details += "```\n" # Use code block for structure
-                    details += "\n".join(structure_lines)
-                    details += "\n```\n\n"
+                    details += "```\n" + "\n".join(structure_lines) + "\n```\n\n"
                 else:
                     details += "(No relevant files or directories found)\n\n"
             except Exception as e:
                 details += f"# Error listing files/directories: {str(e)}\n\n"
 
-
-        # --- Added Chat Files Content ---
-        # Use the direct reference chat_files_ref for reading here
+        # --- List Added Files ---
+        # List the names of files currently in context, but not their content.
         chat_files_list = self.chat_files_ref.get(self.session_path, [])
         if chat_files_list:
-            details += "# Added Files Contents\n"
+            details += "# # Files Currently in Chat Context\n"
             # Clean up stored mtimes/content for files no longer in chat_files_list
             current_chat_files_set = set(chat_files_list)
             for rel_path in list(self.chat_file_mtimes.keys()):
@@ -177,8 +166,6 @@ class Agents:
 
         # --- Other details (Emacs state, etc.) ---
         # TODO: Add other details like open files, running terminals by calling Emacs funcs
-        # Example: open_files = get_emacs_func_result("emigo--get-open-files")
-        # Example: running_terminals = get_emacs_func_result("emigo--get-running-terminals")
 
         details += "</environment_details>"
         return details
@@ -523,41 +510,47 @@ class Agents:
             # Add initial prompt directly to the persistent history
             self.llm_client.append_history({"role": "user", "content": initial_user_prompt})
 
-            max_turns = 10 # Limit turns to prevent infinite loops
+            max_turns = self.max_history_messages # Limit turns to prevent infinite loops
             for turn in range(max_turns):
                 print(f"\n--- Agent Turn {turn + 1}/{max_turns} (Session: {os.path.basename(self.session_path)}) ---", file=sys.stderr)
 
-                # --- Build Prompt ---
-                # Start with system prompt and the *current* persistent history
-                base_messages = [{"role": "system", "content": system_prompt}]
-                # Extract only message dicts from history tuples
-                history_dicts = [msg_dict for _, msg_dict in self.llm_client.get_history()]
-                base_messages.extend(history_dicts) # Get latest history dictionaries
+                # --- Build Prompt with History Truncation ---
+                full_history = self.llm_client.get_history() # List of (ts, msg_dict)
 
-                # Create a temporary list of messages to send, including context
-                messages_to_send = [msg.copy() for msg in base_messages] # Shallow copy is enough
+                # Always include system prompt
+                messages_to_send = [{"role": "system", "content": system_prompt}]
 
-                # Find the last user message *in the temporary list* to append context
-                last_user_message_index = -1
-                try:
-                    # Find the index of the last message with role 'user'
-                    last_user_message_index = next(i for i, msg in enumerate(reversed(messages_to_send)) if msg["role"] == "user")
-                    last_user_message_index = len(messages_to_send) - 1 - last_user_message_index
-                except StopIteration:
-                     print("Error: No user message found in history to append context to.", file=sys.stderr)
-                     eval_in_emacs("emigo--flush-buffer", self.session_path, "[Internal Error: History state invalid]", "error")
-                     break # Exit loop
+                # Extract message dicts
+                history_dicts = [msg_dict for _, msg_dict in full_history]
 
-                # Prepare context to add (only environment details)
-                # The previous tool result is already the last user message in current_history / base_messages
-                environment_details = self._get_environment_details()
-                context_to_add = f"\n\n{environment_details}" # Start with newline for separation
+                # --- History Truncation: Keep only the last N messages ---
+                if len(history_dicts) > self.max_history_messages:
+                    # History needs truncation
+                    truncated_history = history_dicts[-self.max_history_messages:]
+                    # Add ellipsis marker at the beginning
+                    messages_to_send.append({"role": "system", "content": "[... history truncated ...]"})
+                    messages_to_send.extend(truncated_history)
+                    if self.verbose:
+                        print(f"History truncated to last {self.max_history_messages} messages.", file=sys.stderr)
+                else:
+                    # History is short enough, send all messages
+                    messages_to_send.extend(history_dicts)
 
-                # Modify the content of the last user message *only in the temporary list*
-                messages_to_send[last_user_message_index]["content"] += context_to_add
+                # --- Append Environment Details ---
+                # Append to the *last* message in the list being sent, which should be the user's latest prompt or tool result
+                if messages_to_send[-1]["role"] == "user":
+                    environment_details = self._get_environment_details()
+                    # Use copy() to avoid modifying the history object directly
+                    last_message_copy = messages_to_send[-1].copy()
+                    last_message_copy["content"] += f"\n\n{environment_details}"
+                    messages_to_send[-1] = last_message_copy # Replace the last message with the modified copy
+                else:
+                    # This case should ideally not happen if history alternates correctly,
+                    # but add details as a separate system message if it does.
+                    print("Warning: Last message before sending to LLM is not 'user'. Appending environment details as system message.", file=sys.stderr)
+                    environment_details = self._get_environment_details()
+                    messages_to_send.append({"role": "system", "content": environment_details})
 
-                # Consume the tool result flag *after* it has been added to history in the previous turn
-                self.current_tool_result = None
 
                 # --- Send to LLM (Streaming) ---
                 full_response = ""

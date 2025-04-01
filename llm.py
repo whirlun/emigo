@@ -189,8 +189,26 @@ class LLMClient:
                     printable_messages.append(msg)
 
             import json
+            # Calculate approximate token count if tokenizer is available
+            token_count_str = ""
+            if self.verbose and litellm.completion != litellm._lazy_module.completion and hasattr(self, 'tokenizer') and self.tokenizer:
+                try:
+                    # Use litellm's utility if available, otherwise manual count
+                    if hasattr(litellm, 'token_counter'):
+                        token_count = litellm.token_counter(model=self.model_name, messages=messages)
+                        token_count_str = f" (approx. {token_count} tokens)"
+                    else:
+                        # Manual count (less accurate for specific models)
+                        count = 0
+                        for msg in messages:
+                             count += len(self.tokenizer.encode(json.dumps(msg))) # Rough estimate
+                        token_count_str = f" (estimated {count} tokens)"
+                except Exception as e:
+                    token_count_str = f" (token count error: {e})"
+
+
             print(json.dumps(printable_messages, indent=2), file=sys.stderr)
-            print("--- End LLM Request ---", file=sys.stderr)
+            print(f"--- End LLM Request{token_count_str} ---", file=sys.stderr)
 
 
         try:
