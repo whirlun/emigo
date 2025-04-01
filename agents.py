@@ -457,11 +457,14 @@ class Agents:
                     else:
                          end_line_containing_last_char = file_content.count('\n', 0, last_char_index) + 1
 
-                    # Elisp end line is exclusive (the line *after* the region to delete)
+                    # Elisp's delete-region uses an *exclusive* end point.
+                    # To delete lines inclusively from start_line to end_line_containing_last_char,
+                    # we need to provide Elisp with the line number *after* the last line to delete.
                     elisp_end_line = end_line_containing_last_char + 1
 
                     replacements_to_apply.append((start_line, elisp_end_line, replace_text))
-                    print(f"Block {i+1}: Match found >= threshold. Staging replacement for lines {start_line}-{elisp_end_line-1} (Elisp end: {elisp_end_line})", file=sys.stderr)
+                    # The print statement shows the *inclusive* line range being replaced for clarity
+                    print(f"Block {i+1}: Match found >= threshold. Staging replacement for lines {start_line}-{elisp_end_line-1} (Elisp end: {elisp_end_line}):", replace_text)
 
             # --- Handle Errors or Proceed ---
             if errors:
@@ -680,7 +683,7 @@ class Agents:
 
             max_turns = self.max_history_messages # Limit turns to prevent infinite loops
             for turn in range(max_turns):
-                print(f"\n--- Agent Turn {turn + 1}/{max_turns} (Session: {os.path.basename(self.session_path)}) ---", file=sys.stderr)
+                print(f"\n--- Agent Turn {turn + 1}/{max_turns} ---", file=sys.stderr)
 
                 # --- Build Prompt with History Truncation ---
                 full_history = self.llm_client.get_history() # List of (ts, msg_dict)

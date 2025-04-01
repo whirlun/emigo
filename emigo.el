@@ -9,7 +9,7 @@
 ;; Copyright (C) 2025, Emigo, all rights reserved.
 ;; Created: 2025-03-29
 ;; Version: 0.5
-;; Last-Updated: Tue Apr  1 04:06:07 2025 (-0400)
+;; Last-Updated: Tue Apr  1 12:03:13 2025 (-0400)
 ;;           By: Mingde (Matthew) Zeng
 ;; Package-Requires: ((emacs "26.1") (transient "0.3.0") (compat "30.0.2.0"))
 ;; Keywords: ai emacs llm aider ai-pair-programming tools
@@ -411,7 +411,7 @@ as the session path."
 ;; --- Dedicated Window Width Enforcement ---
 
 (defcustom emigo-window-width 50
-  "The height of `emigo' dedicated window."
+  "The width of `emigo' dedicated window."
   :type 'integer
   :group 'emigo)
 
@@ -424,26 +424,14 @@ as the session path."
 (defvar emigo-window-resize-timer nil
   "Timer to periodically enforce the dedicated window width.")
 
-(defvar emigo-saved-window-width nil
-  "Saved width of emigo dedicated window before ediff.")
-
-(defun emigo-save-window-width ()
-  "Save the current width of emigo dedicated window."
-  (when (and emigo-window (window-live-p emigo-window))
-    (setq emigo-saved-window-width (window-width emigo-window))))
-
 (defun emigo-ensure-window-width ()
   "Restore the saved width of emigo dedicated window."
   (when (and (emigo-exist-p)
-             emigo-saved-window-width
-             (not (= (window-width emigo-window) emigo-saved-window-width)))
+             (window-live-p emigo-window)
+             (not (= (window-width emigo-window) emigo-window-width)))
     (window-resize emigo-window
-                   (- emigo-saved-window-width (window-width emigo-window))
+                   (- emigo-window-width (window-width emigo-window))
                    t)))
-
-;; Add hooks for ediff
-(add-hook 'ediff-before-setup-hook #'emigo-save-window-width)
-(add-hook 'ediff-quit-hook #'emigo-ensure-window-width)
 
 (defun emigo--start-dedicated-window-timer ()
   "Start the timer to enforce the dedicated window width."
@@ -515,8 +503,6 @@ Otherwise return nil."
   (select-window emigo-window)
   (set-window-buffer emigo-window emigo-buffer)
   (set-window-dedicated-p (selected-window) t)
-  ;; Save initial window width
-  (setq emigo-saved-window-width (window-width emigo-window))
   ;; Start the enforcement timer
   (emigo--start-dedicated-window-timer))
 
@@ -629,8 +615,7 @@ ROLE is optional and defaults to nil."
           (goto-char (point-max))
           (when (search-backward-regexp (concat "^" emigo-prompt-string) nil t)
             (forward-char (1- (length emigo-prompt-string)))
-            (emigo-lock-region (point-min) (point)))
-          )))))
+            (emigo-lock-region (point-min) (point))))))))
 
 (defun emigo-lock-region (beg end)
   "Super-lock the region from BEG to END."
@@ -778,57 +763,60 @@ Display RESULT-TEXT and optionally offer to run COMMAND-STRING."
 REPLACEMENTS-JSON-STRING is a JSON array of [start_line, end_line, replace_text] lists.
 Lines are 1-based. End line is exclusive. Applies changes from end to start.
 Returns t on success, error string on failure."
-  (condition-case-unless-debug err
-      (progn
-        (unless (file-writable-p abs-path)
-          (error "File is not writable: %s" abs-path))
+  (message "[Emigo] Starting multi-replace for %s" abs-path)
+  (unless (file-writable-p abs-path)
+    (error "File is not writable: %s" abs-path))
 
-        ;; Parse JSON - handle both array and vector formats
-        (let* ((json-array-type 'list) ;; Ensure JSON arrays become lists
-               (replacements (json-read-from-string replacements-json-string))
-               ;; Sort replacements by start line in descending order
-               (sorted-replacements (sort (copy-sequence replacements)
-                                          (lambda (a b) (> (nth 0 a) (nth 0 b)))))
-               (buffer (find-file-noselect abs-path))
-               (modified nil))
+  ;; Parse JSON - handle both array and vector formats
+  (let* ((json-array-type 'list) ;; Ensure JSON arrays become lists
+         (replacements (json-read-from-string replacements-json-string))
+         ;; Sort replacements by start line in descending order
+         (sorted-replacements (sort (copy-sequence replacements)
+                                    (lambda (a b) (> (nth 0 a) (nth 0 b)))))
+         (buffer (find-file-noselect abs-path))
+         (modified nil))
+    (message "[Emigo] Parsed %d replacements" (length replacements))
+    (unless buffer
+      (error "Could not find or open buffer for %s" abs-path))
 
-          (unless buffer
-            (error "Could not find or open buffer for %s" abs-path))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t)) ;; Ensure we can modify
+        ;; Apply replacements from end to start
+        (dolist (replacement sorted-replacements) ;; replacement is a list [start end text]
+          (let ((start-line (nth 0 replacement))
+                (end-line (nth 1 replacement))
+                (replace-text (nth 2 replacement)))
+            (message "[Emigo] Applying replacement: lines %d-%d (%d chars)"
+                     start-line end-line (length replace-text))
+            ;; Go to the start position (beginning of start-line)
+            (goto-char (point-min))
+            (forward-line (1- start-line)) ;; 0-based movement
+            (let ((start-point (point)))
 
-          (with-current-buffer buffer
-            (let ((inhibit-read-only t)) ;; Ensure we can modify
-              ;; Apply replacements from end to start
-              (dolist (replacement sorted-replacements) ;; replacement is a list [start end text]
-                (let ((start-line (nth 0 replacement))
-                      (end-line (nth 1 replacement))
-                      (replace-text (nth 2 replacement)))
-                  ;; Go to the start position (beginning of start-line)
-                  (goto-char (point-min))
-                  (forward-line (1- start-line)) ;; 0-based movement
-                  (let ((start-point (point)))
-                    ;; Go to the end position (beginning of end-line)
-                    (goto-char (point-min))
-                    (forward-line (1- end-line)) ;; Move to beginning of end-line
-                    (let ((end-point (point)))
-                      ;; Delete the region
-                      (delete-region start-point end-point)
-                      ;; Insert the replacement text at the start position
-                      (goto-char start-point)
-                      (insert replace-text)
-                      ;; Mark buffer as modified for saving
-                      (set-buffer-modified-p t)
-                      (setq modified t)))))))
-
-          ;; Save the buffer if modified
-          (when modified
-            (save-buffer buffer)
-            ;; Inform Emacs about the change (e.g., revert other buffers visiting this file)
-            (emigo--file-written-externally abs-path)
-            t))) ;; Return t for success
-    ;; Error handling
-    (error
-     (format "Error replacing multiple regions in %s: %s"
-             (file-name-nondirectory abs-path) (error-message-string err)))))
+              (goto-char (point-min))
+              (forward-line (1- end-line)) ;; Move to beginning of end-line
+              (let ((end-point (point)))
+                (message "[Emigo] Deleting region: %d-%d" start-point end-point)
+                ;; Delete the region
+                (delete-region start-point end-point)
+                ;; Insert the replacement text at the start position
+                (goto-char start-point)
+                (message "[Emigo] Inserting %d chars" (length replace-text))
+                (insert replace-text)
+                ;; Ensure newline at end if not present
+                (unless (looking-back "\n" 1)
+                  (insert "\n"))
+                ;; Mark buffer as modified for saving
+                (set-buffer-modified-p t)
+                (setq modified t))))))
+      ;; Save the buffer if modified
+      (when modified
+        (message "[Emigo] Saving buffer...")
+        (save-buffer buffer)
+        ;; Inform Emacs about the change (e.g., revert other buffers visiting this file)
+        (emigo--file-written-externally abs-path)
+        (message "[Emigo] Save successful")
+        t))))
 
 (defun emigo--file-written-externally (abs-path)
   "Inform Emacs that the file at ABS-PATH was modified externally.
@@ -1021,5 +1009,4 @@ is handled by `emigo-call--sync \"get_history\" session-path`."
       (message "No Emigo process buffer found"))))
 
 (provide 'emigo)
-
 ;;; emigo.el ends here
