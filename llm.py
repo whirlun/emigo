@@ -167,50 +167,6 @@ class LLMClient:
                  completion_kwargs["model"] = self.model_name.replace("ollama/", "")
 
 
-        if self.verbose:
-            print("\n--- Sending to LLM ---", file=sys.stderr)
-            # Avoid printing potentially large base64 images in verbose mode
-            printable_messages = []
-            for msg in messages:
-                if isinstance(msg.get("content"), list): # Handle image messages
-                    new_content = []
-                    for item in msg["content"]:
-                        if isinstance(item, dict) and item.get("type") == "image_url":
-                             # Truncate base64 data for printing
-                             img_url = item.get("image_url", {}).get("url", "")
-                             if isinstance(img_url, str) and img_url.startswith("data:"):
-                                 new_content.append({"type": "image_url", "image_url": {"url": img_url[:50] + "..."}})
-                             else:
-                                 new_content.append(item) # Keep non-base64 or non-string URLs
-                        else:
-                            new_content.append(item)
-                    printable_messages.append({"role": msg["role"], "content": new_content})
-                else:
-                    printable_messages.append(msg)
-
-            import json
-            # Calculate approximate token count if tokenizer is available
-            token_count_str = ""
-            if self.verbose and litellm.completion != litellm._lazy_module.completion and hasattr(self, 'tokenizer') and self.tokenizer:
-                try:
-                    # Use litellm's utility if available, otherwise manual count
-                    if hasattr(litellm, 'token_counter'):
-                        token_count = litellm.token_counter(model=self.model_name, messages=messages)
-                        token_count_str = f" (approx. {token_count} tokens)"
-                    else:
-                        # Manual count (less accurate for specific models)
-                        count = 0
-                        for msg in messages:
-                             count += len(self.tokenizer.encode(json.dumps(msg))) # Rough estimate
-                        token_count_str = f" (estimated {count} tokens)"
-                except Exception as e:
-                    token_count_str = f" (token count error: {e})"
-
-
-            print(json.dumps(printable_messages, indent=2), file=sys.stderr)
-            print(f"--- End LLM Request{token_count_str} ---", file=sys.stderr)
-
-
         try:
             response = litellm.completion(**completion_kwargs)
 

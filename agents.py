@@ -48,13 +48,18 @@ class Agents:
         self.chat_file_mtimes: Dict[str, float] = {} # Store mtimes {rel_path: mtime}
         self.chat_file_contents: Dict[str, str] = {} # Store content {rel_path: content}
         self.last_repomap_content: Optional[str] = None
-        # History truncation setting
-        self.max_history_messages = 10 # Keep last N messages (user/assistant/tool) + first user msg
-        # Tokenizer for history management (assuming gpt-4o compatible)
+        # History truncation settings
+        self.max_history_tokens = 8000  # Target max tokens for history (leaves room for response)
+        self.min_history_messages = 3   # Always keep at least this many messages
+        # Tokenizer for history management
         try:
             self.tokenizer = tiktoken.get_encoding("cl100k_base")
+            # Test the tokenizer works
+            test_tokens = self.tokenizer.encode("test")
+            if not test_tokens:
+                raise ValueError("Tokenizer returned empty tokens")
         except Exception as e:
-            print(f"Warning: Could not load tiktoken tokenizer 'cl100k_base'. History token counting may be inaccurate. Error: {e}", file=sys.stderr)
+            print(f"Warning: Could not initialize tokenizer. Using simple character count fallback. Error: {e}", file=sys.stderr)
             self.tokenizer = None
 
     def _build_system_prompt(self) -> str:
@@ -464,7 +469,7 @@ class Agents:
 
                     replacements_to_apply.append((start_line, elisp_end_line, replace_text))
                     # The print statement shows the *inclusive* line range being replaced for clarity
-                    print(f"Block {i+1}: Match found >= threshold. Staging replacement for lines {start_line}-{elisp_end_line-1} (Elisp end: {elisp_end_line}):", replace_text)
+                    print(f"Block {i+1}: Match found >= threshold. Staging replacement for lines {start_line}-{elisp_end_line-1} (Elisp end: {elisp_end_line})")
 
             # --- Handle Errors or Proceed ---
             if errors:
@@ -681,7 +686,7 @@ class Agents:
             # Add initial prompt directly to the persistent history
             self.llm_client.append_history({"role": "user", "content": initial_user_prompt})
 
-            max_turns = self.max_history_messages # Limit turns to prevent infinite loops
+            max_turns = 10 # Limit turns to prevent infinite loops
             for turn in range(max_turns):
                 print(f"\n--- Agent Turn {turn + 1}/{max_turns} ---", file=sys.stderr)
 
@@ -694,18 +699,8 @@ class Agents:
                 # Extract message dicts
                 history_dicts = [msg_dict for _, msg_dict in full_history]
 
-                # --- History Truncation: Keep only the last N messages ---
-                if len(history_dicts) > self.max_history_messages:
-                    # History needs truncation
-                    truncated_history = history_dicts[-self.max_history_messages:]
-                    # Add ellipsis marker at the beginning
-                    messages_to_send.append({"role": "system", "content": "[... history truncated ...]"})
-                    messages_to_send.extend(truncated_history)
-                    if self.verbose:
-                        print(f"History truncated to last {self.max_history_messages} messages.", file=sys.stderr)
-                else:
-                    # History is short enough, send all messages
-                    messages_to_send.extend(history_dicts)
+                # --- History Truncation: Keep messages within token limit ---
+                messages_to_send.extend(self._truncate_history(history_dicts))
 
                 # --- Append Environment Details ---
                 # Append to the *last* message in the list being sent, which should be the user's latest prompt or tool result
@@ -722,6 +717,49 @@ class Agents:
                     environment_details = self._get_environment_details()
                     messages_to_send.append({"role": "system", "content": environment_details})
 
+
+                # --- Verbose Logging (Moved from LLMClient) ---
+                if self.verbose:
+                    print("\n--- Sending to LLM ---", file=sys.stderr)
+                    # Avoid printing potentially large base64 images in verbose mode
+                    printable_messages = []
+                    for msg in messages_to_send:
+                        if isinstance(msg.get("content"), list): # Handle image messages
+                            new_content = []
+                            for item in msg["content"]:
+                                if isinstance(item, dict) and item.get("type") == "image_url":
+                                     # Truncate base64 data for printing
+                                     img_url = item.get("image_url", {}).get("url", "")
+                                     if isinstance(img_url, str) and img_url.startswith("data:"):
+                                         new_content.append({"type": "image_url", "image_url": {"url": img_url[:50] + "..."}})
+                                     else:
+                                         new_content.append(item) # Keep non-base64 or non-string URLs
+                                else:
+                                    new_content.append(item)
+                            printable_messages.append({"role": msg["role"], "content": new_content})
+                        else:
+                            printable_messages.append(msg)
+
+                    # Calculate approximate token count using self.tokenizer
+                    token_count_str = ""
+                    if self.tokenizer: # Check if tokenizer exists
+                        try:
+                            # Use litellm's utility if available, otherwise manual count
+                            # Note: Need to access litellm via self.llm_client or import it here
+                            # For simplicity, let's use the manual count with self.tokenizer
+                            count = 0
+                            for msg in messages_to_send:
+                                 # Use json.dumps for consistent counting of structure
+                                 count += self._count_tokens(json.dumps(msg))
+                            token_count_str = f" (estimated {count} tokens)"
+                        except Exception as e:
+                            token_count_str = f" (token count error: {e})"
+                    else:
+                        token_count_str = " (tokenizer unavailable for count)"
+
+
+                    print(json.dumps(printable_messages, indent=2), file=sys.stderr)
+                    print(f"--- End LLM Request{token_count_str} ---", file=sys.stderr)
 
                 # --- Send to LLM (Streaming) ---
                 full_response = ""
@@ -808,6 +846,46 @@ class Agents:
             print(f"Agent interaction finished for session {os.path.basename(self.session_path)}.", file=sys.stderr)
             # Signal Emacs that the agent is done for this request
             eval_in_emacs("emigo--agent-finished", self.session_path)
+
+    def _truncate_history(self, history: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        """Truncate history to fit within token limits while preserving important messages."""
+        if not history:
+            return []
+
+        # Always keep first user message for context
+        truncated = [history[0]]
+        current_tokens = self._count_tokens(truncated[0]["content"])
+
+        # Add messages from newest to oldest until we hit the limit
+        for msg in reversed(history[1:]):
+            msg_tokens = self._count_tokens(msg["content"])
+            if current_tokens + msg_tokens > self.max_history_tokens:
+                if len(truncated) >= self.min_history_messages:
+                    break
+                # If we're below min messages, keep going but warn
+                print(f"Warning: History exceeds token limit but below min message count", file=sys.stderr)
+
+            truncated.insert(1, msg)  # Insert after first message
+            current_tokens += msg_tokens
+
+        if self.verbose and len(truncated) < len(history):
+            print(f"History truncated from {len(history)} to {len(truncated)} messages ({current_tokens} tokens)", file=sys.stderr)
+
+        return truncated
+
+    def _count_tokens(self, text: str) -> int:
+        """Count tokens in text using tokenizer or fallback method."""
+        if not text:
+            return 0
+
+        if self.tokenizer:
+            try:
+                return len(self.tokenizer.encode(text))
+            except Exception as e:
+                print(f"Token counting error, using fallback: {e}", file=sys.stderr)
+
+        # Fallback: approximate tokens as 4 chars per token
+        return max(1, len(text) // 4)
 
     def _handle_search_files(self, params: Dict[str, str]) -> str:
         """Search files for text patterns using Python regex matching.
