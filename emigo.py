@@ -116,12 +116,11 @@ class Emigo:
         except Exception as e:
              print(f"ERROR: Invalid session path provided: {session_path} - {e}", file=sys.stderr)
              # Try to message Emacs even if path is bad, using a placeholder name
-             eval_in_emacs("emigo--flush-buffer", f"invalid-session-{session_path}", f"[Error: Invalid session path '{session_path}']", "error", True)
+             eval_in_emacs("emigo--flush-buffer", f"invalid-session-{session_path}", f"[Error: Invalid session path '{session_path}']", "error")
              return
 
         # Flush the user prompt to the Emacs buffer first
-        is_first_message = session_path not in self.agent_dict
-        eval_in_emacs("emigo--flush-buffer", session_path, f"\n\nUser:\n{prompt}\n", "user", is_first_message)
+        eval_in_emacs("emigo--flush-buffer", session_path, f"\n\nUser:\n{prompt}\n", "user")
 
         # --- Handle File Mentions (@file) ---
         mention_pattern = r'@(\S+)'

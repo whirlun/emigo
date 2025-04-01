@@ -561,18 +561,18 @@ class Agents:
 
                 # --- Send to LLM (Streaming) ---
                 full_response = ""
-                eval_in_emacs("emigo--flush-buffer", self.session_path, "\nAssistant:\n", "llm", True) # Signal start
+                eval_in_emacs("emigo--flush-buffer", self.session_path, "\nAssistant:\n", "llm") # Signal start
                 try:
                     # Send the temporary list with context included
                     response_stream = self.llm_client.send(messages_to_send, stream=True)
                     for chunk in response_stream:
-                        eval_in_emacs("emigo--flush-buffer", self.session_path, str(chunk), "llm", False)
+                        eval_in_emacs("emigo--flush-buffer", self.session_path, str(chunk), "llm")
                         full_response += chunk
 
                 except Exception as e:
                     error_message = f"[Error during LLM communication: {e}]"
                     print(f"\n{error_message}", file=sys.stderr)
-                    eval_in_emacs("emigo--flush-buffer", self.session_path, str(error_message), "error", False)
+                    eval_in_emacs("emigo--flush-buffer", self.session_path, str(error_message), "error")
                     # Add error to persistent history
                     self.llm_client.append_history({"role": "assistant", "content": error_message})
                     break # Exit loop on error

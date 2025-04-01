@@ -167,7 +167,7 @@ Searches parent directories for existing sessions."
 
 ;; --- End new functions ---
 
-(defvar emigo-project-buffers nil)   ;; Keep track of buffer objects
+(defvar emigo-project-buffers nil) ;; Keep track of buffer objects
 
 (defvar-local emigo-session-path nil ;; Buffer-local session path
   "The session path (project root or current dir) associated with this Emigo buffer.")
@@ -384,33 +384,32 @@ With no prefix arg, uses the project root (e.g., Git root) as the session path.
 With a prefix arg (C-u), uses the current directory (`default-directory`)
 as the session path."
   (interactive)
-  (let* ((session-path (if current-prefix-arg
-                           (file-truename default-directory)
-                         (file-truename (emigo-project-root))))
-         (buffer-name (emigo-get-buffer-name nil session-path))
-         (buffer (get-buffer-create buffer-name))
-         (prompt (read-string (format "Emigo Prompt (%s): " session-path))))
-    (setq prompt (substring-no-properties prompt))
-    ;; Ensure EPC process is running or starting
-    (unless (emigo-epc-live-p emigo-epc-process)
-      (emigo-start-process))
+  (if (emigo-buffer-exist-p emigo-buffer)
+      (emigo-open)
+    (let* ((session-path (if current-prefix-arg
+                             (file-truename default-directory)
+                           (file-truename (emigo-project-root))))
+           (buffer-name (emigo-get-buffer-name nil session-path))
+           (buffer (get-buffer-create buffer-name)))
+      ;; Ensure EPC process is running or starting
+      (unless (emigo-epc-live-p emigo-epc-process)
+        (emigo-start-process))
 
-    ;; Set buffer-local session path variable
-    (with-current-buffer buffer
-      (emigo-mode)
+      ;; Set buffer-local session path variable
+      (with-current-buffer buffer
+        (emigo-mode)
 
-      (emigo-update-header-line session-path)
-      (setq-local emigo-session-path session-path))
+        (emigo-update-header-line session-path)
+        (setq-local emigo-session-path session-path))
 
-    ;; Add buffer to tracked list
-    (add-to-list 'emigo-project-buffers buffer t) ;; Use t to avoid duplicates
+      ;; Add buffer to tracked list
+      (add-to-list 'emigo-project-buffers buffer t) ;; Use t to avoid duplicates
 
-    ;; Switch to or display the buffer
-    (emigo-create-window buffer) ;; Use the specific buffer
+      ;; Switch to or display the buffer
+      (emigo-create-window buffer) ;; Use the specific buffer
 
-    ;; Send prompt if provided
-    (when (and prompt (not (string-empty-p prompt)))
-      (emigo-call-async "emigo_send" session-path prompt))))
+      ;; Insert prompt.
+      (insert (propertize (concat "\n\n" emigo-prompt-string) 'face font-lock-keyword-face)))))
 
 ;; --- Dedicated Window Width Enforcement ---
 
@@ -441,9 +440,9 @@ as the session path."
   (when (and (emigo-exist-p)
              emigo-saved-window-width
              (not (= (window-width emigo-window) emigo-saved-window-width)))
-      (window-resize emigo-window
-                     (- emigo-saved-window-width (window-width emigo-window))
-                     t)))
+    (window-resize emigo-window
+                   (- emigo-saved-window-width (window-width emigo-window))
+                   t)))
 
 ;; Add hooks for ediff
 (add-hook 'ediff-before-setup-hook #'emigo-save-window-width)
@@ -602,7 +601,7 @@ Otherwise return nil."
       (delete-region (point) (point-max))
       (emigo-call-async "emigo_send" emigo-session-path prompt))))
 
-(defun emigo--flush-buffer (session-path content role &rest init)
+(defun emigo--flush-buffer (session-path content role)
   "Flush CONTENT to the Emigo buffer associated with SESSION-PATH."
   (let ((buffer-name (emigo-get-buffer-name nil session-path))
         (buffer (get-buffer (emigo-get-buffer-name t session-path)))) ;; Find existing buffer
@@ -613,12 +612,6 @@ Otherwise return nil."
     (with-current-buffer buffer
       (save-excursion
         (let ((inhibit-read-only t)) ;; Allow modification even if buffer is read-only
-          ;; If this is the first message and buffer is empty, add the prompt at the end
-          (when (and init (= (buffer-size) 0))
-            (goto-char (point-max))
-            (insert (propertize (concat "\n\n" emigo-prompt-string) 'face font-lock-keyword-face))
-            (goto-char (point-max))) ;; Move cursor to end after adding first prompt
-
           ;; For all content, append at the appropriate position
           (goto-char (point-max))
           (when (search-backward-regexp (concat "^" emigo-prompt-string) nil t)
@@ -777,10 +770,10 @@ Display RESULT-TEXT and optionally offer to run COMMAND-STRING."
             (insert (propertize "\n--- Completion Attempt ---\n" 'face 'font-lock-comment-face))
             (insert result-text)
             (insert (propertize "\n--- End Completion ---\n" 'face 'font-lock-comment-face)))))
-        (message "[Emigo] Task completed by agent for session: %s" (file-name-nondirectory session-path))
-        (when (and command-string (not (string-empty-p command-string)))
-          (if (y-or-n-p (format "Run demonstration command? `%s`" command-string))
-              (emigo--execute-command-sync session-path command-string))))))
+      (message "[Emigo] Task completed by agent for session: %s" (file-name-nondirectory session-path))
+      (when (and command-string (not (string-empty-p command-string)))
+        (if (y-or-n-p (format "Run demonstration command? `%s`" command-string))
+            (emigo--execute-command-sync session-path command-string))))))
 
 (defun emigo--apply-diff-sync (session-path abs-path diff-string)
   "Apply the SEARCH/REPLACE blocks in DIFF-STRING to the file at ABS-PATH.
@@ -855,8 +848,8 @@ If the file is visited in a buffer, offer to revert it."
           (revert-buffer :ignore-auto :noconfirm))))
     (when (and buffer (not (buffer-modified-p buffer)))
       ;; If buffer is not modified, revert automatically
-       (with-current-buffer buffer
-          (revert-buffer :ignore-auto :noconfirm)))))
+      (with-current-buffer buffer
+        (revert-buffer :ignore-auto :noconfirm)))))
 
 (defun emigo--agent-finished (session-path)
   "Callback function when the agent finishes its interaction for SESSION-PATH."
@@ -974,9 +967,9 @@ is handled by `emigo-call--sync \"get_history\" session-path`."
 
     ;; Check if history is a list (basic validation)
     (unless (or history (listp history))
-       (message "Received invalid history format from Python for session: %s" emigo-session-path)
-       (when (get-buffer buf) (kill-buffer buf))
-       (cl-return-from emigo-show-history))
+      (message "Received invalid history format from Python for session: %s" emigo-session-path)
+      (when (get-buffer buf) (kill-buffer buf))
+      (cl-return-from emigo-show-history))
 
     (with-current-buffer buf
       (let ((inhibit-read-only t)) ;; Allow modification during setup
