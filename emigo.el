@@ -9,7 +9,7 @@
 ;; Copyright (C) 2025, Emigo, all rights reserved.
 ;; Created: 2025-03-29
 ;; Version: 0.5
-;; Last-Updated: Mon Mar 31 19:22:29 2025 (-0400)
+;; Last-Updated: Tue Apr  1 04:06:07 2025 (-0400)
 ;;           By: Mingde (Matthew) Zeng
 ;; Package-Requires: ((emacs "26.1") (transient "0.3.0") (compat "30.0.2.0"))
 ;; Keywords: ai emacs llm aider ai-pair-programming tools
@@ -76,7 +76,7 @@
              (emigo-epc-define-method mngr 'request-tool-approval-sync 'emigo--request-tool-approval-sync)
              (emigo-epc-define-method mngr 'ask-user-sync 'emigo--ask-user-sync)
              (emigo-epc-define-method mngr 'signal-completion 'emigo--signal-completion)
-             (emigo-epc-define-method mngr 'apply-diff-sync 'emigo--apply-diff-sync)
+             (emigo-epc-define-method mngr 'replace-regions-sync 'emigo--replace-regions-sync)
              (emigo-epc-define-method mngr 'file-written-externally 'emigo--file-written-externally)
              (emigo-epc-define-method mngr 'agent-finished 'emigo--agent-finished)
              (emigo-epc-define-method mngr 'execute-command-sync 'emigo--execute-command-sync)
@@ -174,9 +174,6 @@ Searches parent directories for existing sessions."
 
 (defvar-local emigo--llm-output "" ;; Buffer-local LLM output accumulator
   "Accumulates the LLM output stream for the current interaction.")
-
-;; Removed emigo-project-root buffer-local variable
-;; Removed buffer-local emigo--chat-history (history managed in Python)
 
 (defvar emigo-epc-process nil)
 
@@ -601,8 +598,9 @@ Otherwise return nil."
       (delete-region (point) (point-max))
       (emigo-call-async "emigo_send" emigo-session-path prompt))))
 
-(defun emigo--flush-buffer (session-path content role)
-  "Flush CONTENT to the Emigo buffer associated with SESSION-PATH."
+(defun emigo--flush-buffer (session-path content &optional role)
+  "Flush CONTENT to the Emigo buffer associated with SESSION-PATH.
+ROLE is optional and defaults to nil."
   (let ((buffer-name (emigo-get-buffer-name nil session-path))
         (buffer (get-buffer (emigo-get-buffer-name t session-path)))) ;; Find existing buffer
     (unless buffer
@@ -775,67 +773,62 @@ Display RESULT-TEXT and optionally offer to run COMMAND-STRING."
         (if (y-or-n-p (format "Run demonstration command? `%s`" command-string))
             (emigo--execute-command-sync session-path command-string))))))
 
-(defun emigo--apply-diff-sync (session-path abs-path diff-string)
-  "Apply the SEARCH/REPLACE blocks in DIFF-STRING to the file at ABS-PATH.
-SESSION-PATH is the project root path.
-Returns '(:final_content \"...\") on success or '(:error \"...\") on failure.
-Handles file reading, sequential SEARCH/REPLACE application, and writing."
+(defun emigo--replace-regions-sync (abs-path replacements-json-string)
+  "Replace multiple regions in ABS-PATH based on data in REPLACEMENTS-JSON-STRING.
+REPLACEMENTS-JSON-STRING is a JSON array of [start_line, end_line, replace_text] lists.
+Lines are 1-based. End line is exclusive. Applies changes from end to start.
+Returns t on success, error string on failure."
   (condition-case-unless-debug err
-      (let* ((original-content (with-temp-buffer (insert-file-contents abs-path) (buffer-string)))
-             (current-content original-content)
-             ;; Split the diff string by the fence, omitting empty parts
-             (raw-blocks (split-string diff-string "````" t))
-             ;; Filter out any blocks that might be just whitespace
-             (diff-blocks (seq-filter (lambda (s) (not (string-blank-p s))) raw-blocks))
-             (offset 0) ;; Track position in the *current* content for searching
-             (applied-count 0))
-
+      (progn
         (unless (file-writable-p abs-path)
           (error "File is not writable: %s" abs-path))
 
-        (dolist (block diff-blocks)
-          (let ((search-marker "<<<<<<< SEARCH\n")
-                (divider-marker "\n=======\n")
-                (replace-marker "\n>>>>>>> REPLACE"))
-            (unless (and (string-match-p (regexp-quote search-marker) block)
-                         (string-match-p (regexp-quote divider-marker) block)
-                         (string-match-p (regexp-quote replace-marker) block))
-              (error "Malformed SEARCH/REPLACE block: %s" (substring block 0 (min 50 (length block)))))
+        ;; Parse JSON - handle both array and vector formats
+        (let* ((json-array-type 'list) ;; Ensure JSON arrays become lists
+               (replacements (json-read-from-string replacements-json-string))
+               ;; Sort replacements by start line in descending order
+               (sorted-replacements (sort (copy-sequence replacements)
+                                          (lambda (a b) (> (nth 0 a) (nth 0 b)))))
+               (buffer (find-file-noselect abs-path))
+               (modified nil))
 
-            (let* ((search-start (+ (string-match (regexp-quote search-marker) block) (length search-marker)))
-                   (divider-start (string-match (regexp-quote divider-marker) block))
-                   (replace-start (+ divider-start (length divider-marker)))
-                   (replace-end (string-match (regexp-quote replace-marker) block))
-                   (search-text (substring block search-start divider-start))
-                   (replace-text (substring block replace-start replace-end))
-                   (found-pos (string-match (regexp-quote search-text) current-content offset)))
+          (unless buffer
+            (error "Could not find or open buffer for %s" abs-path))
 
-              (unless found-pos
-                ;; Error: Search text not found *after* previous replacements
-                (error "SEARCH block not found starting from offset %d:\n%s" offset search-text))
+          (with-current-buffer buffer
+            (let ((inhibit-read-only t)) ;; Ensure we can modify
+              ;; Apply replacements from end to start
+              (dolist (replacement sorted-replacements) ;; replacement is a list [start end text]
+                (let ((start-line (nth 0 replacement))
+                      (end-line (nth 1 replacement))
+                      (replace-text (nth 2 replacement)))
+                  ;; Go to the start position (beginning of start-line)
+                  (goto-char (point-min))
+                  (forward-line (1- start-line)) ;; 0-based movement
+                  (let ((start-point (point)))
+                    ;; Go to the end position (beginning of end-line)
+                    (goto-char (point-min))
+                    (forward-line (1- end-line)) ;; Move to beginning of end-line
+                    (let ((end-point (point)))
+                      ;; Delete the region
+                      (delete-region start-point end-point)
+                      ;; Insert the replacement text at the start position
+                      (goto-char start-point)
+                      (insert replace-text)
+                      ;; Mark buffer as modified for saving
+                      (set-buffer-modified-p t)
+                      (setq modified t)))))))
 
-              ;; Perform replacement
-              (setq current-content (replace-match replace-text t t current-content 0)) ;; Replace only first match from found-pos onwards? No, replace first match globally. Let's stick to first match globally for simplicity like Cline.
-              ;; Update offset for next search *based on the length change*
-              ;; This is tricky. Let's restart search from beginning each time for simplicity, though less efficient.
-              ;; (setq offset (+ found-pos (length replace-text)))
-              (setq offset 0) ;; Restart search from beginning
-              (cl-incf applied-count))))
-
-        ;; Write the final modified content back to the file
-        (with-temp-file abs-path
-          (insert current-content))
-
-        ;; Inform Emacs about the change (e.g., revert buffer if visited)
-        (emigo--file-written-externally abs-path)
-
-        ;; Read back potentially auto-formatted content
-        (let ((final-content (emigo--read-file-content-sync abs-path)))
-          `(:final_content ,final-content))) ;; Success
-
+          ;; Save the buffer if modified
+          (when modified
+            (save-buffer buffer)
+            ;; Inform Emacs about the change (e.g., revert other buffers visiting this file)
+            (emigo--file-written-externally abs-path)
+            t))) ;; Return t for success
     ;; Error handling
-    (`(:error ,(format "Error applying diff to %s: %s" (file-name-nondirectory abs-path) (error-message-string err))))))
-
+    (error
+     (format "Error replacing multiple regions in %s: %s"
+             (file-name-nondirectory abs-path) (error-message-string err)))))
 
 (defun emigo--file-written-externally (abs-path)
   "Inform Emacs that the file at ABS-PATH was modified externally.
