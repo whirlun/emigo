@@ -40,25 +40,11 @@ Please use only for testing and development. Report issues - your feedback helps
       :config
       (emigo-enable) ;; Starts the background process automatically
       :custom
-      ;; Example using OpenRouter with Claude 3.7 Sonnet
-      (emigo-model "openrouter/anthropic/claude-3.7-sonnet")
+      ;; Encourage using OpenRouter with Deepseek
+      (emigo-model "openrouter/deepseek/deepseek-chat-v3-0324"")
       (emigo-base-url "https://openrouter.ai/api/v1")
       ;; Securely load your API key (replace with your preferred method)
       (emigo-api-key (emigo-read-file-content "~/.config/openrouter/key.txt")))
-
-    ;; With the current limitations, I do not recommend using a thinking model
-    ;; by default to save tokens
-
-    ;; --- Other LLM Examples (adjust model, base_url, api_key) ---
-    ;; Anthropic:
-    ;; (setq emigo-model "claude-3-5-sonnet-20240620")
-    ;; (setq emigo-base-url nil) ; Uses default Anthropic endpoint
-    ;; (setq emigo-api-key (getenv "ANTHROPIC_API_KEY"))
-
-    ;; OpenAI:
-    ;; (setq emigo-model "gpt-4o")
-    ;; (setq emigo-base-url nil) ; Uses default OpenAI endpoint
-    ;; (setq emigo-api-key (getenv "OPENAI_API_KEY")) ; Or use emigo-read-file-content
     ```
 
 ## Usage
