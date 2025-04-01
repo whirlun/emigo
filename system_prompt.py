@@ -10,6 +10,8 @@ TOOL_LIST_FILES = "list_files"
 TOOL_LIST_REPOMAP = "list_repomap"
 TOOL_ASK_FOLLOWUP_QUESTION = "ask_followup_question"
 TOOL_ATTEMPT_COMPLETION = "attempt_completion"
+TOOL_FIND_DEFINITION = "find_definition" # New Tool
+TOOL_FIND_REFERENCES = "find_references" # New Tool
 # Add other tool names as needed
 
 # --- Tool Result/Error Messages (Similar to Cline's formatResponse) ---
@@ -219,6 +221,25 @@ Your final result description here
 </result>
 <command>Command to demonstrate result (optional)</command>
 </attempt_completion>
+
+## find_definition
+Description: Locate and display the code snippet defining a specific symbol (function, class, variable, etc.) within the project. This leverages the indexed code structure (similar to list_repomap) to quickly find the definition without reading entire files. Use this when you need to understand how a specific entity is implemented.
+Parameters:
+- symbol: (required) The exact name of the symbol (function, class, variable) to find the definition for.
+Usage:
+<find_definition>
+<symbol>SymbolName</symbol>
+</find_definition>
+
+## find_references
+Description: Find all locations where a specific symbol (function, class, variable, etc.) is used or referenced within the project. This helps understand the impact of changing a symbol or how it's integrated into the codebase. It lists the file path and line number for each reference found in the indexed code structure.
+Parameters:
+- symbol: (required) The exact name of the symbol (function, class, variable) to find references for.
+Usage:
+<find_references>
+<symbol>SymbolName</symbol>
+</find_references>
+
 
 # Tool Use Examples
 

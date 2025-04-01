@@ -17,7 +17,8 @@ from system_prompt import (
     # Tool Names
     TOOL_EXECUTE_COMMAND, TOOL_READ_FILE, TOOL_WRITE_TO_FILE,
     TOOL_REPLACE_IN_FILE, TOOL_SEARCH_FILES, TOOL_LIST_FILES,
-    TOOL_LIST_REPOMAP, TOOL_ASK_FOLLOWUP_QUESTION, TOOL_ATTEMPT_COMPLETION
+    TOOL_LIST_REPOMAP, TOOL_ASK_FOLLOWUP_QUESTION, TOOL_ATTEMPT_COMPLETION,
+    TOOL_FIND_DEFINITION, TOOL_FIND_REFERENCES # Added new tool names
 )
 import tiktoken # For token counting in history truncation
 import difflib # For fuzzy matching SEARCH blocks
@@ -590,6 +591,126 @@ class Agents:
             self.last_repomap_content = None
             return self._format_tool_error(f"Error generating repository map: {e}")
 
+    def _handle_find_definition(self, params: Dict[str, str]) -> str:
+        """Find and display the definition snippet for a given symbol."""
+        symbol = params.get("symbol")
+        if not symbol:
+            return self._format_tool_error(f"Missing required parameter 'symbol' for {TOOL_FIND_DEFINITION}")
+
+        try:
+            # Access the underlying RepoMap instance and its cache
+            repo_map = self.repo_mapper.repo_mapper
+            if not hasattr(repo_map, 'TAGS_CACHE'):
+                 return self._format_tool_error("Tags cache is not available.")
+
+            definitions = []
+            # Iterate through the cache to find definitions matching the symbol
+            # Note: This iterates through *all* cached files. Could be optimized if needed.
+            for cache_key in repo_map.TAGS_CACHE.keys():
+                try:
+                    # Check if cache_key is a valid file path before proceeding
+                    if not isinstance(cache_key, str) or not os.path.exists(cache_key):
+                        continue # Skip non-path keys or non-existent files
+
+                    cached_item = repo_map.TAGS_CACHE.get(cache_key)
+                    if cached_item and isinstance(cached_item, dict) and "data" in cached_item:
+                        tags = cached_item.get("data", [])
+                        for tag in tags:
+                            # Ensure tag is a valid Tag object before accessing attributes
+                            # Need to import Tag from repomapper
+                            from repomapper import Tag
+                            if isinstance(tag, Tag) and tag.kind == "def" and tag.name == symbol:
+                                definitions.append(tag)
+                except Exception as cache_read_err:
+                    # Log error reading specific cache entry but continue searching
+                    print(f"Warning: Error reading cache entry for {cache_key}: {cache_read_err}", file=sys.stderr)
+                    continue # Skip this entry
+
+            if not definitions:
+                return self._format_tool_result(f"{TOOL_RESULT_SUCCESS}\nNo definition found for symbol: {symbol}")
+
+            # Group definitions by file and render snippets
+            output = f"{TOOL_RESULT_SUCCESS}\nFound definition(s) for symbol '{symbol}':\n"
+            from collections import defaultdict # Need to import defaultdict
+            grouped_defs = defaultdict(list)
+            for tag in definitions:
+                grouped_defs[tag.rel_fname].append(tag)
+
+            for rel_fname, tags in sorted(grouped_defs.items()):
+                abs_fname = tags[0].fname # Get abs path from the first tag
+                lois = sorted(list(set(tag.line for tag in tags if tag.line >= 0))) # Unique, sorted lines
+                if lois: # Only render if we have valid line numbers
+                    output += f"\n--- File: {rel_fname} ---\n"
+                    rendered_tree = repo_map.render_tree(abs_fname, rel_fname, lois)
+                    output += rendered_tree
+                else:
+                    # If no line numbers (e.g., only file-level defs), just list file
+                    output += f"\n--- File: {rel_fname} (Definition likely at top level) ---\n"
+
+
+            return self._format_tool_result(output)
+
+        except Exception as e:
+            print(f"Error finding definition for '{symbol}': {e}\n{traceback.format_exc()}", file=sys.stderr)
+            return self._format_tool_error(f"Error finding definition for {symbol}: {e}")
+
+    def _handle_find_references(self, params: Dict[str, str]) -> str:
+        """Find and list all references to a given symbol."""
+        symbol = params.get("symbol")
+        if not symbol:
+            return self._format_tool_error(f"Missing required parameter 'symbol' for {TOOL_FIND_REFERENCES}")
+
+        try:
+            # Access the underlying RepoMap instance and its cache
+            repo_map = self.repo_mapper.repo_mapper
+            if not hasattr(repo_map, 'TAGS_CACHE'):
+                 return self._format_tool_error("Tags cache is not available.")
+
+            references = []
+            # Iterate through the cache to find references matching the symbol
+            for cache_key in repo_map.TAGS_CACHE.keys():
+                 try:
+                    if not isinstance(cache_key, str) or not os.path.exists(cache_key):
+                        continue
+
+                    cached_item = repo_map.TAGS_CACHE.get(cache_key)
+                    if cached_item and isinstance(cached_item, dict) and "data" in cached_item:
+                        tags = cached_item.get("data", [])
+                        for tag in tags:
+                             # Need to import Tag from repomapper
+                             from repomapper import Tag
+                             if isinstance(tag, Tag) and tag.kind == "ref" and tag.name == symbol:
+                                 references.append(tag)
+                 except Exception as cache_read_err:
+                    print(f"Warning: Error reading cache entry for {cache_key}: {cache_read_err}", file=sys.stderr)
+                    continue
+
+            if not references:
+                return self._format_tool_result(f"{TOOL_RESULT_SUCCESS}\nNo references found for symbol: {symbol}")
+
+            # Group references by file and line
+            output = f"{TOOL_RESULT_SUCCESS}\nFound reference(s) for symbol '{symbol}':\n"
+            from collections import defaultdict # Need to import defaultdict
+            grouped_refs = defaultdict(list)
+            for tag in references:
+                # Use line number if available, otherwise indicate file-level ref
+                line_info = f":{tag.line}" if tag.line >= 0 else " (file level)"
+                grouped_refs[tag.rel_fname].append(line_info)
+
+            for rel_fname, lines in sorted(grouped_refs.items()):
+                output += f"\n- {rel_fname}\n"
+                # Sort line numbers numerically if possible
+                sorted_lines = sorted(lines, key=lambda x: int(x[1:]) if x[1:].isdigit() else float('inf'))
+                for line_info in sorted_lines:
+                    output += f"  - Line{line_info}\n"
+
+            return self._format_tool_result(output)
+
+        except Exception as e:
+            print(f"Error finding references for '{symbol}': {e}\n{traceback.format_exc()}", file=sys.stderr)
+            return self._format_tool_error(f"Error finding references for {symbol}: {e}")
+
+
     def _handle_list_files(self, params: Dict[str, str]) -> str:
         rel_path = params.get("path")
         recursive = params.get("recursive", "false").lower() == "true"
@@ -633,6 +754,8 @@ class Agents:
             TOOL_LIST_REPOMAP: self._handle_list_repomap,
             TOOL_LIST_FILES: self._handle_list_files,
             TOOL_SEARCH_FILES: self._handle_search_files,
+            TOOL_FIND_DEFINITION: self._handle_find_definition, # Add new handler
+            TOOL_FIND_REFERENCES: self._handle_find_references, # Add new handler
         }
 
         handler = handler_map.get(tool_name)
@@ -644,11 +767,12 @@ class Agents:
         no_auto_approve_list = [
             TOOL_EXECUTE_COMMAND,
             TOOL_WRITE_TO_FILE,
+            # Note: replace_in_file approval is handled implicitly by Emacs UI for now
         ]
 
         # Only request approval for tools in the no_auto_approve_list
-        # Read file is generally safe, list files/repomap are read-only.
-        # Ask/Attempt completion interact directly. Search is read-only.
+        # Read file, list files/repomap, find def/refs, search are read-only.
+        # Ask/Attempt completion interact directly.
         if tool_name in no_auto_approve_list:
             try:
                 # Convert params dict to a plist string for Elisp
