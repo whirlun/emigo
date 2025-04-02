@@ -138,7 +138,35 @@ class Emigo:
             return False
 
     def emigo_send(self, session_path: str, prompt: str):
-        """Handles a prompt for a specific session path by delegating to the Agents."""
+        """Handles a prompt for a specific session path by delegating to the Agents.
+
+        File Replacement Architecture Overview:
+
+        1. Multiple Tool Calls per Turn:
+        - The run_interaction loop in agents.py processes tool calls sequentially
+        - Groups replace_in_file calls by target file (replacements_by_file)
+        - For each file, executes its associated replace_in_file calls one by one
+        - After each successful file modification, the agent re-reads the file content
+          and updates its internal cache (self.chat_file_contents)
+        - Ensures subsequent replace_in_file calls in the same turn operate on updated content
+
+        2. Multiple SEARCH/REPLACE Blocks per <diff>:
+        - The _handle_replace_in_file function in agents.py:
+          * Parses all valid SEARCH/REPLACE blocks from the <diff> string
+          * Performs fuzzy matching (difflib.SequenceMatcher) for each block
+          * If all blocks match, calculates line numbers for all blocks
+          * Sends the complete list of replacements to emigo--replace-regions-sync
+
+        Why This Approach is Preferred:
+        - Efficiency: Single Python-to-Elisp call per file with all changes
+        - Correctness: Bottom-up application prevents line number shifts
+        - Simplicity: Avoids complex intermediate state management
+
+        Edge Case Handling:
+        - If changes were applied top-down, line numbers would become invalid
+        - The Elisp function explicitly sorts and applies bottom-up to prevent this
+        - File is only saved after all changes are successfully applied
+        """
         print(f"Received prompt for session: {session_path} (Path: {session_path})", file=sys.stderr)
 
         # Ensure session_path is valid directory

@@ -668,6 +668,232 @@ class Agents:
              print(f"Error during execution of tool '{tool_name}': {e}\n{traceback.format_exc()}", file=sys.stderr)
              return self._format_tool_error(f"Error executing tool '{tool_name}': {e}")
 
+    def _prepare_llm_prompt(self, system_prompt: str, full_history: List[Tuple[float, Dict]]) -> List[Dict]:
+        """Prepares the list of messages for the LLM, including history truncation and environment details."""
+        # Always include system prompt
+        messages_to_send = [{"role": "system", "content": system_prompt}]
+
+        # Extract message dicts
+        history_dicts = [msg_dict for _, msg_dict in full_history]
+
+        # --- History Truncation: Keep messages within token limit ---
+        messages_to_send.extend(self._truncate_history(history_dicts))
+
+        # --- Append Environment Details ---
+        # Append to the *last* message in the list being sent, which should be the user's latest prompt or tool result
+        if messages_to_send[-1]["role"] == "user":
+            environment_details = self._get_environment_details()
+            # Use copy() to avoid modifying the history object directly
+            last_message_copy = messages_to_send[-1].copy()
+            last_message_copy["content"] += f"\n\n{environment_details}"
+            messages_to_send[-1] = last_message_copy # Replace the last message with the modified copy
+        else:
+            # This case should ideally not happen if history alternates correctly,
+            # but add details as a separate system message if it does.
+            print("Warning: Last message before sending to LLM is not 'user'. Appending environment details as system message.", file=sys.stderr)
+            environment_details = self._get_environment_details()
+            messages_to_send.append({"role": "system", "content": environment_details})
+
+
+        # --- Verbose Logging (Moved from LLMClient) ---
+        if self.verbose:
+            print("\n--- Sending to LLM ---", file=sys.stderr)
+            # Avoid printing potentially large base64 images in verbose mode
+            printable_messages = []
+            for msg in messages_to_send:
+                if isinstance(msg.get("content"), list): # Handle image messages
+                    new_content = []
+                    for item in msg["content"]:
+                        if isinstance(item, dict) and item.get("type") == "image_url":
+                             # Truncate base64 data for printing
+                             img_url = item.get("image_url", {}).get("url", "")
+                             if isinstance(img_url, str) and img_url.startswith("data:"):
+                                 new_content.append({"type": "image_url", "image_url": {"url": img_url[:50] + "..."}})
+                             else:
+                                 new_content.append(item) # Keep non-base64 or non-string URLs
+                        else:
+                            new_content.append(item)
+                    printable_messages.append({"role": msg["role"], "content": new_content})
+                else:
+                    printable_messages.append(msg)
+
+            # Calculate approximate token count using self.tokenizer
+            token_count_str = ""
+            if self.tokenizer: # Check if tokenizer exists
+                try:
+                    # Use litellm's utility if available, otherwise manual count
+                    # Note: Need to access litellm via self.llm_client or import it here
+                    # For simplicity, let's use the manual count with self.tokenizer
+                    count = 0
+                    for msg in messages_to_send:
+                         # Use json.dumps for consistent counting of structure
+                         count += self._count_tokens(json.dumps(msg))
+                    token_count_str = f" (estimated {count} tokens)"
+                except Exception as e:
+                    token_count_str = f" (token count error: {e})"
+            else:
+                token_count_str = " (tokenizer unavailable for count)"
+
+
+            print(json.dumps(printable_messages, indent=2), file=sys.stderr)
+            print(f"--- End LLM Request{token_count_str} ---", file=sys.stderr)
+
+        return messages_to_send
+
+    def _call_llm_and_stream_response(self, messages_to_send: List[Dict]) -> Optional[str]:
+        """Calls the LLM, streams the response, and returns the full response text."""
+        full_response = ""
+        eval_in_emacs("emigo--flush-buffer", self.session_path, "\nAssistant:\n", "llm") # Signal start
+        try:
+            # Send the temporary list with context included
+            response_stream = self.llm_client.send(messages_to_send, stream=True)
+            for chunk in response_stream:
+                eval_in_emacs("emigo--flush-buffer", self.session_path, str(chunk), "llm")
+                full_response += chunk
+            return full_response
+        except Exception as e:
+            error_message = f"[Error during LLM communication: {e}]"
+            print(f"\n{error_message}", file=sys.stderr)
+            eval_in_emacs("emigo--flush-buffer", self.session_path, str(error_message), "error")
+            # Add error to persistent history (handled in main loop now)
+            # self.llm_client.append_history({"role": "assistant", "content": error_message})
+            return None # Indicate error
+
+    def _process_llm_response(self, full_response: str) -> Tuple[bool, Optional[str]]:
+        """
+        Parses the LLM response, executes tools, and determines if the loop should continue.
+
+        Returns:
+            Tuple (should_continue: bool, combined_tool_result: Optional[str])
+            - should_continue: False if interaction should end (completion, denial, final answer).
+            - combined_tool_result: The combined text result of all tools executed this turn.
+        """
+        tool_list = self._parse_tool_use(full_response)
+        turn_tool_results = [] # Collect results from all tools this turn
+        completion_signalled = False
+        tool_denied = False
+        combined_result_message = None # Initialize
+
+        if tool_list:
+            print(f"Processing {len(tool_list)} tool uses for this turn...", file=sys.stderr)
+
+            # Separate replacements from other tools
+            replace_calls = []
+            other_calls = []
+            for tool_name, params in tool_list:
+                if tool_name == TOOL_REPLACE_IN_FILE:
+                    replace_calls.append((tool_name, params))
+                else:
+                    other_calls.append((tool_name, params))
+
+            # Group replacements by file path
+            from collections import defaultdict
+            replacements_by_file = defaultdict(list)
+            for tool_name, params in replace_calls:
+                rel_path = params.get("path")
+                if rel_path:
+                    replacements_by_file[rel_path].append((tool_name, params))
+                else:
+                    # Handle missing path error immediately
+                    error_msg = self._format_tool_error(f"Missing required parameter 'path' for {TOOL_REPLACE_IN_FILE}")
+                    turn_tool_results.append(error_msg)
+                    print(f"Error: {error_msg}", file=sys.stderr)
+                    # Potentially stop processing if this error is critical? For now, just record it.
+
+            # --- Process Replacements Sequentially Per File ---
+            for rel_path, file_replace_calls in replacements_by_file.items():
+                if completion_signalled or tool_denied: break # Stop if completion/denial occurred
+
+                print(f"Processing {len(file_replace_calls)} replacement(s) for file: {rel_path}", file=sys.stderr)
+                abs_path = os.path.abspath(os.path.join(self.session_path, rel_path))
+
+                for i, (tool_name, params) in enumerate(file_replace_calls):
+                    print(f"Executing replacement {i+1}/{len(file_replace_calls)} for {rel_path}...", file=sys.stderr)
+                    tool_result = self._execute_tool(tool_name, params)
+                    turn_tool_results.append(tool_result) # Collect result
+
+                    if tool_result == "COMPLETION_SIGNALLED":
+                        print("Completion signalled during replacement. Ending interaction.", file=sys.stderr)
+                        completion_signalled = True
+                        break # Stop processing more tools for this file and others
+
+                    if tool_result == self._format_tool_result(TOOL_DENIED):
+                        print("Tool denied during replacement. Ending interaction.", file=sys.stderr)
+                        tool_denied = True
+                        break # Stop processing more tools for this file and others
+
+                    # Check if the replacement was successful before updating cache
+                    if TOOL_RESULT_SUCCESS in tool_result and TOOL_ERROR_PREFIX not in tool_result:
+                        print(f"Replacement successful for {rel_path}. Updating internal cache.", file=sys.stderr)
+                        try:
+                            # Re-read content from Emacs to update cache accurately
+                            updated_content = get_emacs_func_result("read-file-content-sync", abs_path)
+                            self.chat_file_contents[rel_path] = updated_content
+                            # Optionally update mtime if needed, though content is key
+                            # current_mtime = self.repo_mapper.repo_mapper.get_mtime(abs_path)
+                            # self.chat_file_mtimes[rel_path] = current_mtime or time.time()
+                            print(f"Internal cache updated for '{rel_path}'.")
+                        except Exception as read_err:
+                            print(f"Warning: Failed to re-read file '{rel_path}' after successful replacement to update cache: {read_err}", file=sys.stderr)
+                            # Invalidate cache entry on read error to force re-read next time
+                            if rel_path in self.chat_file_contents: del self.chat_file_contents[rel_path]
+                            if rel_path in self.chat_file_mtimes: del self.chat_file_mtimes[rel_path]
+                            # Append a warning to the successful result message
+                            turn_tool_results[-1] += "\n(Warning: Could not update internal cache after modification.)"
+                    else:
+                        # Replacement failed, stop processing further replacements for *this file*
+                        print(f"Replacement failed for {rel_path}. Stopping further replacements for this file.", file=sys.stderr)
+                        break # Move to the next file or other tools
+
+            # --- Process Other Tools ---
+            if not completion_signalled and not tool_denied:
+                print(f"Executing {len(other_calls)} other tool(s)...", file=sys.stderr)
+                for tool_name, params in other_calls:
+                    tool_result = self._execute_tool(tool_name, params)
+                    turn_tool_results.append(tool_result) # Collect result
+
+                    if tool_result == "COMPLETION_SIGNALLED":
+                        print("Completion signalled during other tool execution. Ending interaction.", file=sys.stderr)
+                        completion_signalled = True
+                        break # Stop processing more tools
+
+                    if tool_result == self._format_tool_result(TOOL_DENIED):
+                        print("Tool denied during other tool execution. Ending interaction.", file=sys.stderr)
+                        tool_denied = True
+                        break # Stop processing more tools
+
+            # --- Combine Results ---
+            if turn_tool_results:
+                # Filter out potential None results if any tool failed unexpectedly before returning formatted string
+                valid_results = [res for res in turn_tool_results if isinstance(res, str)]
+                combined_result_message = "\n\n".join(valid_results)
+                # Store combined result for the next turn's prompt context (if needed)
+                self.current_tool_result = combined_result_message
+
+            # Determine if loop should continue
+            if completion_signalled or tool_denied:
+                return False, combined_result_message # Stop loop
+
+            # If we got here, tools executed (or there were none that stopped the loop)
+            # The loop continues, pass back the combined result for history update
+            return True, combined_result_message
+
+        else:
+            # No tool use found in the response.
+            is_empty_or_whitespace = not full_response.strip()
+
+            if is_empty_or_whitespace:
+                # Empty response from LLM. Treat as end of interaction or potential error.
+                print("Empty response received from LLM, ending interaction.", file=sys.stderr)
+                return False, None # Stop loop gracefully on empty response
+            else:
+                # Response has content but no valid tool.
+                # Assume this is the final answer from the LLM for this interaction,
+                # regardless of thinking tags.
+                print("No tool use found, assuming final response. Ending interaction.", file=sys.stderr)
+                # Don't add an error message. Just break the loop.
+                return False, None # Stop loop gracefully
+
     def run_interaction(self, initial_user_prompt: str):
         """Runs the main agent interaction loop."""
         with self.lock:
@@ -687,147 +913,33 @@ class Agents:
             for turn in range(max_turns):
                 print(f"\n--- Agent Turn {turn + 1}/{max_turns} ---", file=sys.stderr)
 
-                # --- Build Prompt with History Truncation ---
-                full_history = self.llm_client.get_history() # List of (ts, msg_dict)
+                # 1. Prepare Prompt
+                full_history = self.llm_client.get_history()
+                messages_to_send = self._prepare_llm_prompt(system_prompt, full_history)
 
-                # Always include system prompt
-                messages_to_send = [{"role": "system", "content": system_prompt}]
+                # 2. Call LLM
+                full_response = self._call_llm_and_stream_response(messages_to_send)
 
-                # Extract message dicts
-                history_dicts = [msg_dict for _, msg_dict in full_history]
-
-                # --- History Truncation: Keep messages within token limit ---
-                messages_to_send.extend(self._truncate_history(history_dicts))
-
-                # --- Append Environment Details ---
-                # Append to the *last* message in the list being sent, which should be the user's latest prompt or tool result
-                if messages_to_send[-1]["role"] == "user":
-                    environment_details = self._get_environment_details()
-                    # Use copy() to avoid modifying the history object directly
-                    last_message_copy = messages_to_send[-1].copy()
-                    last_message_copy["content"] += f"\n\n{environment_details}"
-                    messages_to_send[-1] = last_message_copy # Replace the last message with the modified copy
-                else:
-                    # This case should ideally not happen if history alternates correctly,
-                    # but add details as a separate system message if it does.
-                    print("Warning: Last message before sending to LLM is not 'user'. Appending environment details as system message.", file=sys.stderr)
-                    environment_details = self._get_environment_details()
-                    messages_to_send.append({"role": "system", "content": environment_details})
-
-
-                # --- Verbose Logging (Moved from LLMClient) ---
-                if self.verbose:
-                    print("\n--- Sending to LLM ---", file=sys.stderr)
-                    # Avoid printing potentially large base64 images in verbose mode
-                    printable_messages = []
-                    for msg in messages_to_send:
-                        if isinstance(msg.get("content"), list): # Handle image messages
-                            new_content = []
-                            for item in msg["content"]:
-                                if isinstance(item, dict) and item.get("type") == "image_url":
-                                     # Truncate base64 data for printing
-                                     img_url = item.get("image_url", {}).get("url", "")
-                                     if isinstance(img_url, str) and img_url.startswith("data:"):
-                                         new_content.append({"type": "image_url", "image_url": {"url": img_url[:50] + "..."}})
-                                     else:
-                                         new_content.append(item) # Keep non-base64 or non-string URLs
-                                else:
-                                    new_content.append(item)
-                            printable_messages.append({"role": msg["role"], "content": new_content})
-                        else:
-                            printable_messages.append(msg)
-
-                    # Calculate approximate token count using self.tokenizer
-                    token_count_str = ""
-                    if self.tokenizer: # Check if tokenizer exists
-                        try:
-                            # Use litellm's utility if available, otherwise manual count
-                            # Note: Need to access litellm via self.llm_client or import it here
-                            # For simplicity, let's use the manual count with self.tokenizer
-                            count = 0
-                            for msg in messages_to_send:
-                                 # Use json.dumps for consistent counting of structure
-                                 count += self._count_tokens(json.dumps(msg))
-                            token_count_str = f" (estimated {count} tokens)"
-                        except Exception as e:
-                            token_count_str = f" (token count error: {e})"
-                    else:
-                        token_count_str = " (tokenizer unavailable for count)"
-
-
-                    print(json.dumps(printable_messages, indent=2), file=sys.stderr)
-                    print(f"--- End LLM Request{token_count_str} ---", file=sys.stderr)
-
-                # --- Send to LLM (Streaming) ---
-                full_response = ""
-                eval_in_emacs("emigo--flush-buffer", self.session_path, "\nAssistant:\n", "llm") # Signal start
-                try:
-                    # Send the temporary list with context included
-                    response_stream = self.llm_client.send(messages_to_send, stream=True)
-                    for chunk in response_stream:
-                        eval_in_emacs("emigo--flush-buffer", self.session_path, str(chunk), "llm")
-                        full_response += chunk
-
-                except Exception as e:
-                    error_message = f"[Error during LLM communication: {e}]"
-                    print(f"\n{error_message}", file=sys.stderr)
-                    eval_in_emacs("emigo--flush-buffer", self.session_path, str(error_message), "error")
-                    # Add error to persistent history
+                if full_response is None:
+                    # Error occurred during LLM call, add error message to history
+                    error_message = "[Error during LLM communication]" # Generic, specific error logged in helper
                     self.llm_client.append_history({"role": "assistant", "content": error_message})
-                    break # Exit loop on error
+                    break # Exit loop on communication error
 
                 # Add assistant's full response to persistent history *before* tool processing
                 self.llm_client.append_history({"role": "assistant", "content": full_response})
 
-                # --- Parse and Execute Tools ---
-                tool_list = self._parse_tool_use(full_response)
-                turn_tool_results = []
-                completion_signalled = False
-                tool_denied = False
+                # 3. Process Response (Tools, Completion, etc.)
+                should_continue, combined_tool_result = self._process_llm_response(full_response)
 
-                if tool_list:
-                    print(f"Executing {len(tool_list)} tools for this turn...", file=sys.stderr)
-                    for tool_name, params in tool_list:
-                        tool_result = self._execute_tool(tool_name, params)
-                        turn_tool_results.append(tool_result) # Collect result
+                # Add combined tool result message to persistent history for the LLM's next turn
+                # Only add if the loop should continue and there were actual results
+                if should_continue and combined_tool_result:
+                     self.llm_client.append_history({"role": "user", "content": combined_tool_result})
 
-                        if tool_result == "COMPLETION_SIGNALLED":
-                            print("Completion signalled. Ending interaction after this tool.", file=sys.stderr)
-                            completion_signalled = True
-                            break # Stop processing more tools in this turn
-
-                        if tool_result == self._format_tool_result(TOOL_DENIED):
-                            print("Tool denied, ending interaction after this tool.", file=sys.stderr)
-                            tool_denied = True
-                            break # Stop processing more tools in this turn
-
-                    # Combine results for the next LLM turn
-                    if turn_tool_results:
-                        combined_result_message = "\n\n".join(turn_tool_results)
-                        # Store combined result for the next turn's prompt context (if needed, though env details might suffice)
-                        self.current_tool_result = combined_result_message
-                        # Add combined tool result message to persistent history for the LLM's next turn
-                        self.llm_client.append_history({"role": "user", "content": combined_result_message})
-
-                    # If completion was signalled or a tool was denied, exit the main loop
-                    if completion_signalled or tool_denied:
-                        break
-
-                else:
-                    # No tool use found in the response.
-                    is_empty_or_whitespace = not full_response.strip()
-
-                    if is_empty_or_whitespace:
-                        # Empty response from LLM. Treat as end of interaction or potential error.
-                        print("Empty response received from LLM, ending interaction.", file=sys.stderr)
-                        break # Exit loop gracefully on empty response
-                    else:
-                        # Response has content but no valid tool.
-                        # Assume this is the final answer from the LLM for this interaction,
-                        # regardless of thinking tags.
-                        print("No tool use found, assuming final response. Ending interaction.", file=sys.stderr)
-                        # Don't add an error message. Just break the loop.
-                        break # Exit loop gracefully
+                # Exit loop if completion signalled, tool denied, or final answer given
+                if not should_continue:
+                    break
             else:
                 # Loop finished due to max_turns
                 print(f"Warning: Exceeded max turns ({max_turns}) for session {self.session_path}.", file=sys.stderr)

@@ -9,7 +9,7 @@
 ;; Copyright (C) 2025, Emigo, all rights reserved.
 ;; Created: 2025-03-29
 ;; Version: 0.5
-;; Last-Updated: Wed Apr  2 11:55:20 2025 (-0400)
+;; Last-Updated: Wed Apr  2 13:28:47 2025 (-0400)
 ;;           By: Mingde (Matthew) Zeng
 ;; Package-Requires: ((emacs "26.1") (transient "0.3.0") (compat "30.0.2.0"))
 ;; Keywords: ai emacs llm aider ai-pair-programming tools
@@ -783,8 +783,41 @@ Display RESULT-TEXT and optionally offer to run COMMAND-STRING."
 
 (defun emigo--replace-regions-sync (abs-path replacements-json-string)
   "Replace multiple regions in ABS-PATH based on data in REPLACEMENTS-JSON-STRING.
+
 REPLACEMENTS-JSON-STRING is a JSON array of [start_line, end_line, replace_text] lists.
 Lines are 1-based. End line is exclusive. Applies changes from end to start.
+
+Design Principles:
+1. Batch Processing: All replacements for a file are processed in a single call
+   to minimize Python-Elisp round trips and file I/O operations.
+
+2. Bottom-Up Application:
+   - Replacements are sorted by start line in descending order
+   - Applied from end of file to beginning
+   - Ensures line numbers remain valid during batch processing
+   - Prevents the need to recalculate positions after each change
+
+3. Atomic Operation:
+   - File is only saved once after all replacements are applied
+   - Minimizes disk I/O and prevents partial updates
+
+4. Error Handling:
+   - Validates file is writable before starting
+   - Validates JSON parsing
+   - Returns t on success, error string on failure
+
+Performance Considerations:
+- Sorting replacements is O(n log n) but n is typically small (handful of changes)
+- Batch processing is much faster than individual file operations
+- Single file save at end is more efficient than multiple saves
+
+Usage Example (from Python side):
+  JSON payload: [[10, 12, \"new text\\n\"], [5, 7, \"other text\"]]
+  Will:
+  1. Replace lines 10-11 with \"new text\"
+  2. Replace lines 5-6 with \"other text\"
+  (Applied in reverse order to maintain line number validity)
+
 Returns t on success, error string on failure."
   (message "[Emigo] Starting multi-replace for %s" abs-path)
   (unless (file-writable-p abs-path)
