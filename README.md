@@ -50,14 +50,13 @@ Please use only for testing and development. Report issues - your feedback helps
 ## Usage
 
 1.  **Start Emigo:** Navigate to your project directory (or any directory you want to work in) and run `M-x emigo`.
-2.  **Enter Prompt:** You'll be prompted for your request in the minibuffer.
-3.  **Interact:** Emigo will open a dedicated buffer. The AI will respond, potentially using tools. You might be asked for approval for certain actions (like running commands or writing files).
-4.  **Add Files to Context:** Mention files in your prompt using the `@` symbol (e.g., `Refactor the function in @src/utils.py`). Emigo will automatically add mentioned files to the context if they exist within the project.
-5.  **Manage Context:**
+2.  **Interact:** Emigo will open a dedicated buffer. The AI will respond, potentially using tools. You might be asked for approval for certain actions (like running commands or writing files).
+3.  **Add Files to Context:** Mention files in your prompt using the `@` symbol (e.g., `Refactor the function in @src/utils.py`). Emigo will automatically add mentioned files to the context if they exist within the project.
+4.  **Manage Context:**
     *   `C-c C-l` (`emigo-list-context-files`): List files currently included in the chat context.
     *   `C-c C-f` (`emigo-remove-file-from-context`): Remove a file from the context.
 
-Emigo manages sessions based on the directory where you invoke `M-x emigo`. If invoked within a Git repository, the repository root is typically used as the session path. Use `C-u M-x emigo` to force the session path to be the current `default-directory`.
+Note: Emigo manages sessions based on the directory where you invoke `M-x emigo`. If invoked within a Git repository, the repository root is typically used as the session path. Use `C-u M-x emigo` to force the session path to be the current `default-directory`.
 
 ## Understanding Tool Use
 
