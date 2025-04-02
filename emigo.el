@@ -9,7 +9,7 @@
 ;; Copyright (C) 2025, Emigo, all rights reserved.
 ;; Created: 2025-03-29
 ;; Version: 0.5
-;; Last-Updated: Tue Apr  1 12:03:13 2025 (-0400)
+;; Last-Updated: Wed Apr  2 11:55:20 2025 (-0400)
 ;;           By: Mingde (Matthew) Zeng
 ;; Package-Requires: ((emacs "26.1") (transient "0.3.0") (compat "30.0.2.0"))
 ;; Keywords: ai emacs llm aider ai-pair-programming tools
@@ -534,8 +534,9 @@ Otherwise return nil."
     (define-key map (kbd "C-m") #'emigo-send-prompt)
     (define-key map (kbd "C-c C-c") #'emigo-send-prompt)
     (define-key map (kbd "C-c C-r") #'emigo-restart-process)
-    (define-key map (kbd "C-c C-f") #'emigo-remove-file-from-context)
-    (define-key map (kbd "C-c C-l") #'emigo-list-context-files)
+    (define-key map (kbd "C-c C-f") #'emigo-drop-file-from-context)
+    (define-key map (kbd "C-c C-a") #'emigo-add-file-to-context)
+    (define-key map (kbd "C-c C-l") #'emigo-ls-files-in-context)
     (define-key map (kbd "C-c C-y") #'emigo-clear-history)
     (define-key map (kbd "C-c C-h") #'emigo-show-history)
     (define-key map (kbd "S-<return>") #'emigo-send-newline)
@@ -663,7 +664,29 @@ This advice can make `other-window' skip `emigo' dedicated window."
                (eq emigo-window (selected-window)))
       (other-window count))))
 
-(defun emigo-remove-file-from-context ()
+(defun emigo-add-file-to-context ()
+  "Interactively add a file to the current project's Emigo chat context.
+The file path is relative to the session directory."
+  (interactive)
+  (unless (emigo-epc-live-p emigo-epc-process)
+    (message "[Emigo] Process not running.")
+    (emigo-start-process)            ; Attempt to start if not running
+    (error "Emigo process was not running, please try again shortly."))
+
+  (let ((buffer (emigo-get-buffer-name t)))
+    (unless buffer
+      (error "[Emigo] No Emigo buffer found"))
+
+    (with-current-buffer buffer
+      (unless emigo-session-path
+        (error "[Emigo] Could not determine session path from buffer"))
+
+      (let* ((default-directory emigo-session-path)
+             (file-to-add (read-file-name "Add file to context: " default-directory)))
+        (when file-to-add
+          (emigo-call-async "add_file_to_context" emigo-session-path file-to-add))))))
+
+(defun emigo-drop-file-from-context ()
   "Remove a file from the current project's Emigo chat context."
   (interactive)
   (unless (emigo-epc-live-p emigo-epc-process)
@@ -684,7 +707,7 @@ This advice can make `other-window' skip `emigo' dedicated window."
 
         (unless chat-files
           (message "[Emigo] No files currently in chat context for session: %s" emigo-session-path)
-          (cl-return-from emigo-remove-file-from-context))
+          (cl-return-from emigo-drop-file-from-context))
 
         (setq file-to-remove (completing-read "Remove file from context: " chat-files nil t))
 
@@ -977,7 +1000,7 @@ is handled by `emigo-call--sync \"get_history\" session-path`."
                             (string-trim content)))))))
     (switch-to-buffer-other-window buf)))
 
-(defun emigo-list-context-files ()
+(defun emigo-ls-files-in-context ()
   "List the files currently in the Emigo chat context for the current project."
   (interactive)
   (unless (emigo-epc-live-p emigo-epc-process)

@@ -82,6 +82,36 @@ class Emigo:
         """Returns the list of files currently in the chat context for a session."""
         return self.chat_files.get(session_path, [])
 
+    def add_file_to_context(self, session_path: str, filename: str) -> bool:
+        """Adds a specific file to the chat context for a session."""
+        if session_path not in self.chat_files:
+            self.chat_files[session_path] = []
+
+        try:
+            # Ensure filename is relative to session_path for consistency
+            rel_filename = os.path.relpath(filename, session_path)
+
+            # Check if file exists and is within session path
+            abs_path = os.path.abspath(os.path.join(session_path, rel_filename))
+            if not os.path.isfile(abs_path) or not abs_path.startswith(session_path):
+                message_emacs(f"Could not add '{rel_filename}' to context (file not found or invalid)")
+                return False
+
+            # Add to context if not already present
+            if rel_filename not in self.chat_files[session_path]:
+                self.chat_files[session_path].append(rel_filename)
+                message_emacs(f"Added '{rel_filename}' to chat context for session: {session_path}")
+                return True
+            return False  # File was already in context
+
+        except ValueError as e:
+            # Handle cases where filename is on different drive (Windows)
+            message_emacs(f"Cannot add file from different drive: {filename}")
+            return False
+        except Exception as e:
+            message_emacs(f"Error adding file to context: {e}")
+            return False
+
     def remove_file_from_context(self, session_path: str, filename: str) -> bool:
         """Removes a specific file from the chat context for a session."""
         if session_path in self.chat_files:
@@ -129,9 +159,9 @@ class Emigo:
         mentioned_files_in_prompt = re.findall(mention_pattern, prompt)
         if mentioned_files_in_prompt:
             print(f"Found file mentions in prompt: {mentioned_files_in_prompt}", file=sys.stderr)
-            # Add these files to context *before* starting the agents interaction
-            self.add_files_to_context(session_path, mentioned_files_in_prompt)
-        # ---
+            # Add each mentioned file to context *before* starting the agents interaction
+            for file in mentioned_files_in_prompt:
+                self.add_file_to_context(session_path, file)
 
         # Get or create the agents for this session
         agent_instance = self.agent_dict.get(session_path)
@@ -150,59 +180,6 @@ class Emigo:
         self.thread_queue.append(thread)
         thread.daemon = True # Allow program to exit even if agents threads are running
         thread.start()
-
-    def add_files_to_context(self, session_path: str, files_to_add: List[str]) -> List[str]:
-        """
-        Adds a list of files to the chat context for a given session.
-
-        Handles validation against session_path, prevents duplicates,
-        updates self.chat_files[session_path], and notifies Emacs.
-
-        Args:
-            session_path: The absolute path identifier and root path for the session context.
-            files_to_add: A list of relative or absolute file paths to potentially add.
-
-        Returns:
-            A list of the relative file paths that were newly added to the context.
-        """
-        if not files_to_add:
-            return []
-
-        # Ensure the session list exists in chat_files
-        chat_files_list = self.chat_files.setdefault(session_path, [])
-        chat_files_set = set(chat_files_list) # Use set for efficient checking
-        newly_added_rel_paths = []
-
-        for file_path_input in files_to_add:
-            # Try to resolve the path relative to the session_path
-            # Handle if file_path_input is already absolute
-            if os.path.isabs(file_path_input):
-                abs_path = file_path_input
-            else:
-                abs_path = os.path.abspath(os.path.join(session_path, file_path_input))
-
-            # Check if the file exists and is within the session_path (basic check)
-            if os.path.isfile(abs_path) and abs_path.startswith(session_path):
-                # Always store the relative path
-                rel_path = os.path.relpath(abs_path, session_path)
-                if rel_path not in chat_files_set:
-                    chat_files_list.append(rel_path)
-                    chat_files_set.add(rel_path)
-                    newly_added_rel_paths.append(rel_path)
-                # else: already in context
-            else:
-                # File not found or outside session path
-                message_emacs(f"Warning: File '{file_path_input}' not found or invalid for session {session_path}.")
-                print(f"Warning: File '{file_path_input}' (resolved to {abs_path}) not found or invalid.", file=sys.stderr)
-
-
-        if newly_added_rel_paths:
-            added_files_str = ', '.join(newly_added_rel_paths)
-            message_emacs(f"Added files to context for session {session_path}: {added_files_str}")
-            print(f"Added files to context for session {session_path}: {added_files_str}", file=sys.stderr)
-            # Update the main chat_files dictionary (already done by modifying list in place)
-
-        return newly_added_rel_paths # Return list of newly added relative paths
 
     def _start_agent(self, session_path: str) -> Optional[Agents]:
         """Starts a new LLM client and Agents for a session."""

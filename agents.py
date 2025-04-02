@@ -266,15 +266,12 @@ class Agents:
             posix_rel_path = rel_path.replace(os.sep, '/')
 
             # --- Add file to context after successful read ---
-            # Directly modify the chat_files list via the reference.
-            # Note: This does NOT send a confirmation message back to Emacs,
-            # unlike the previous approach using emigo_instance.add_files_to_context.
             try:
                 session_files = self.chat_files_ref.setdefault(self.session_path, [])
                 if rel_path not in session_files:
                     session_files.append(rel_path)
                     if self.verbose:
-                        print(f"Added '{rel_path}' to internal chat context for session {os.path.basename(self.session_path)}.", file=sys.stderr)
+                        print(f"Added '{rel_path}' to internal chat context for session {self.session_path}.", file=sys.stderr)
             except Exception as add_err:
                 # Log error but don't fail the read operation itself
                 print(f"Warning: Failed to add '{rel_path}' to internal context after reading: {add_err}", file=sys.stderr)
@@ -833,7 +830,7 @@ class Agents:
                         break # Exit loop gracefully
             else:
                 # Loop finished due to max_turns
-                print(f"Warning: Exceeded max turns ({max_turns}) for session {os.path.basename(self.session_path)}.", file=sys.stderr)
+                print(f"Warning: Exceeded max turns ({max_turns}) for session {self.session_path}.", file=sys.stderr)
                 eval_in_emacs("emigo--flush-buffer", self.session_path, "[Warning: Agent reached max interaction turns]", "warning")
 
 
@@ -843,7 +840,7 @@ class Agents:
         finally:
             with self.lock:
                 self.is_running = False
-            print(f"Agent interaction finished for session {os.path.basename(self.session_path)}.", file=sys.stderr)
+            print(f"Agent interaction finished for session {self.session_path}.", file=sys.stderr)
             # Signal Emacs that the agent is done for this request
             eval_in_emacs("emigo--agent-finished", self.session_path)
 

@@ -53,8 +53,9 @@ Please use only for testing and development. Report issues - your feedback helps
 2.  **Interact:** Emigo will open a dedicated buffer. The AI will respond, potentially using tools. You might be asked for approval for certain actions (like running commands or writing files).
 3.  **Add Files to Context:** Mention files in your prompt using the `@` symbol (e.g., `Refactor the function in @src/utils.py`). Emigo will automatically add mentioned files to the context if they exist within the project.
 4.  **Manage Context:**
-    *   `C-c C-l` (`emigo-list-context-files`): List files currently included in the chat context.
-    *   `C-c C-f` (`emigo-remove-file-from-context`): Remove a file from the context.
+    *   `C-c C-l` (`emigo-ls-files-in-context`): List files currently included in the chat context.
+    *   `C-c C-f` (`emigo-drop-file-from-context`): Remove a file from the context.
+    *   `C-c C-a` (`emigo-add-file-to-context`): Interactively add a file to the chat context.
 
 Note: Emigo manages sessions based on the directory where you invoke `M-x emigo`. If invoked within a Git repository, the repository root is typically used as the session path. Use `C-u M-x emigo` to force the session path to be the current `default-directory`.
 
