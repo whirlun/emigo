@@ -40,6 +40,8 @@ class Emigo:
         self.agent_dict: Dict[str, Agents] = {} # Key: session_path, Value: Agents instance
         self.chat_files: Dict[str, List[str]] = {} # Key: session_path, Value: list of relative file paths
 
+        self.thread_queue = []  # use to reference thread, avoid multi-thread condition-race bug by thread release by GC
+
         # Build EPC server.
         self.server = ThreadingEPCServer(('127.0.0.1', 0), log_traceback=True)
         # self.server.logger.setLevel(logging.DEBUG)
@@ -145,6 +147,7 @@ class Emigo:
 
         # Run the agents interaction in a separate thread
         thread = threading.Thread(target=agent_instance.run_interaction, args=(prompt,))
+        self.thread_queue.append(thread)
         thread.daemon = True # Allow program to exit even if agents threads are running
         thread.start()
 
