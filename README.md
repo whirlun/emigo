@@ -43,13 +43,25 @@ Please use only for testing and development. Report issues - your feedback helps
 
 ## Usage
 
-1.  **Start Emigo:** Navigate to your project directory (or any directory you want to work in) and run `M-x emigo`.
-2.  **Interact:** Emigo will open a dedicated buffer. The AI will respond, potentially using tools. You might be asked for approval for certain actions (like running commands or writing files).
-3.  **Add Files to Context:** Mention files in your prompt using the `@` symbol (e.g., `Refactor the function in @src/utils.py`). Emigo will automatically add mentioned files to the context if they exist within the project.
-4.  **Manage Context:**
-    *   `C-c C-l` (`emigo-ls-files-in-context`): List files currently included in the chat context.
-    *   `C-c C-f` (`emigo-drop-file-from-context`): Remove a file from the context.
-    *   `C-c C-a` (`emigo-add-file-to-context`): Interactively add a file to the chat context.
+### Basic Interaction
+1. **Start Emigo:** Navigate to your project directory (or any directory you want to work in) and run `M-x emigo`.
+2. **Interact:** Emigo will open a dedicated buffer. The AI will respond, potentially using tools. You might be asked for approval for certain actions (like running commands or writing files).
+3. **Send Prompts:** Type your prompt and press `C-c C-c` or `C-m` to send it to Emigo.
+
+### Context Management
+- **Add Files:**
+  - Mention files in your prompt using `@` (e.g., `Refactor @src/utils.py`)
+  - Or use `C-c f` to interactively add files
+- **List Files in Context:** `C-c l`
+- **Remove Files from Context:** `C-c j`
+- **Clear Chat History:** `C-c H`
+- **View History:** `C-c h` (shows in Org mode buffer)
+
+### Keybindings
+#### Core Commands
+- `C-c C-c` / `C-m` - Send current prompt
+- `C-c r` - Restart Emigo process
+- `C-c k` - Cancel current interaction
 
 Note: Emigo manages sessions based on the directory where you invoke `M-x emigo`. If invoked within a Git repository, the repository root is typically used as the session path. Use `C-u M-x emigo` to force the session path to be the current `default-directory`.
 
