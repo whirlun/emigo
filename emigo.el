@@ -176,6 +176,8 @@ Searches parent directories for existing sessions."
 (defvar-local emigo--llm-output "" ;; Buffer-local LLM output accumulator
   "Accumulates the LLM output stream for the current interaction.")
 
+(defvar-local emigo-chat-file-info nil)
+
 (defvar emigo-epc-process nil)
 
 (defvar emigo-internal-process nil)
@@ -342,10 +344,17 @@ Then Emigo will start by gdb, please send new issue with `emigo-name' buffer con
     (insert-file-contents filepath)
     (string-trim (buffer-string))))
 
-
 (defun emigo-update-header-line (session-path)
   (setq header-line-format (concat
-                            (propertize (format " Project [%s]" (emigo-format-session-path session-path)) 'face font-lock-constant-face))))
+                            (propertize (format " Project [%s]" (emigo-format-session-path session-path)) 'face font-lock-constant-face)
+                            (when emigo-chat-file-info
+                              (propertize (format " | %s" emigo-chat-file-info) 'face font-lock-constant-face)))))
+
+(defun emigo-update-chat-files-info (session-path chat-files)
+  (let ((buffer (get-buffer (emigo-get-buffer-name t session-path)))) ;; Find existing buffer
+    (with-current-buffer buffer
+      (setq-local emigo-chat-file-info chat-files)))
+  (emigo-update-header-line session-path))
 
 (defun emigo-shrink-dir-name (input-string)
   (let* ((words (split-string input-string "-"))

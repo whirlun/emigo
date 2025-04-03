@@ -24,10 +24,11 @@ Key Responsibilities:
 import sys
 import os
 import time
+import tiktoken
 from typing import Dict, List, Optional, Tuple
 
 from repomapper import RepoMapper
-from utils import read_file_content, _filter_environment_details
+from utils import *
 
 class Session:
     """Encapsulates the state and operations for a single Emigo session."""
@@ -42,6 +43,8 @@ class Session:
         # RepoMapper instance specific to this session
         # TODO: Get map_tokens and tokenizer from config?
         self.repo_mapper = RepoMapper(root_dir=self.session_path, verbose=self.verbose)
+
+        self.tokenizer = tiktoken.get_encoding("cl100k_base")
         print(f"Initialized Session for path: {self.session_path}", file=sys.stderr)
 
     def get_history(self) -> List[Tuple[float, Dict]]:
@@ -86,6 +89,10 @@ class Session:
             # Add to context if not already present
             if rel_filename not in self.chat_files:
                 self.chat_files.append(rel_filename)
+
+                # Update chat files information to Emacs.
+                self._update_chat_files_info()
+
                 # Read initial content into cache
                 self._update_file_cache(rel_filename)
                 return True, f"Added '{rel_filename}' to context."
@@ -113,12 +120,39 @@ class Session:
 
         if rel_filename in self.chat_files:
             self.chat_files.remove(rel_filename)
+
+            # Update chat files information to Emacs.
+            self._update_chat_files_info()
+
             # Clean up cache for the removed file
             if rel_filename in self.caches['mtimes']: del self.caches['mtimes'][rel_filename]
             if rel_filename in self.caches['contents']: del self.caches['contents'][rel_filename]
             return True, f"Removed '{rel_filename}' from context."
         else:
             return False, f"File '{rel_filename}' not found in context."
+
+    def _update_chat_files_info(self):
+        """Updates the cached info for all files in the chat context.
+
+        This ensures we have the latest content for all files in the chat context.
+        Also counts and prints the token count for each file.
+        """
+        file_number = 0
+        tokens = 0
+        for rel_path in self.chat_files:
+            abs_path = os.path.join(self.session_path, rel_path)
+            if os.path.exists(abs_path):
+                text = read_file_content(abs_path)
+                token_count = len(self.tokenizer.encode(text))
+                file_number += 1
+                tokens += token_count
+
+        if file_number > 1:
+            chat_file_info = f"{file_number} files [{tokens} tokens]"
+        else:
+            chat_file_info = f"{file_number} file [{tokens} tokens]"
+
+        eval_in_emacs("emigo-update-chat-files-info", self.session_path, chat_file_info)
 
     def _update_file_cache(self, rel_path: str, content: Optional[str] = None) -> bool:
         """Updates the cache (mtime, content) for a given relative file path."""
