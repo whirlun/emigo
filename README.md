@@ -2,11 +2,11 @@
   <img style='height: auto; width: 35%; object-fit: contain' src="./Emigo.png">
 </p>
 
-# Emigo: Agentic AI Programming Assistant for Emacs
+# Emigo: Future of Agentic Development in Emacs
 
-Emigo brings AI-powered development to Emacs, integrating large language models directly into your workflow. Inspired by the capabilities of tools like [Aider](https://github.com/paul-gauthier/aider) and [Cline](https://github.com/sturdy-dev/cline), and the spiritual successor of [Aidermacs](https://github.com/MatthewZMD/aidermacs), Emigo acts as an **agentic** AI assistant. It leverages **tool use** to interact with your project, read files, write code, execute commands, and more, all within Emacs.
+Supercharge your Emacs workflow with Emigo - an intelligent, agentic Emacs-native AI assistant that understands and interacts with your codebase. Built on the shoulders of giants including [Cursor](https://www.cursor.com/en), [Aider](https://github.com/paul-gauthier/aider) and [Cline](https://github.com/sturdy-dev/cline), Emigo is the spiritual successor to [Aidermacs](https://github.com/MatthewZMD/aidermacs), reimagined from the ground up for Emacs. Brought to you by the creators of [Emacs Application Framework](https://github.com/emacs-eaf/emacs-application-framework) and [lsp-bridge](https://github.com/manateelazycat/lsp-bridge).
 
-## ⚠️ Emigo is under very active development. Expect breaking changes, unstable features, incomplete documentation
+## ⚠️ Emigo is under *very* active development. Expect breaking changes, unstable features, incomplete documentation
 
 Please use only for testing and development. Report issues - your feedback helps shape Emigo!
 
