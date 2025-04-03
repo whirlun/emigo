@@ -1,6 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+"""
+Utility functions for Emigo, primarily focused on Emacs communication.
+
+This module provides helper functions used across the Emigo Python backend.
+Its main role is to facilitate communication from Python back to the Emacs
+Lisp frontend using the EPC (Emacs Process Communication) protocol.
+
+Key Features:
+- Initialization and management of the EPC client connection to Emacs.
+- Functions (`eval_in_emacs`, `get_emacs_func_result`, `get_emacs_var`, etc.)
+  to execute Elisp code or retrieve variables from Emacs, both synchronously
+  and asynchronously.
+- Argument transformation helpers (`epc_arg_transformer`) to bridge Python
+  data types and Elisp S-expressions.
+- Basic file/path utilities (`path_to_uri`, `read_file_content`).
+- OS detection (`get_os_name`).
+"""
+
 # Copyright (C) 2022 Andy Stewart
 #
 # Author:     Andy Stewart <lazycat.manatee@gmail.com>

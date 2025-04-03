@@ -2,7 +2,15 @@
 # -*- coding: utf-8 -*-
 
 """
-Central configuration for Emigo, including file lists and constants.
+Central Configuration for Emigo.
+
+This module stores shared constants and configuration settings used across
+different parts of the Emigo Python backend. This includes lists for
+ignoring directories and file extensions during repository scanning, and
+a list defining files considered "important" at the root of a project for
+prioritization in the repository map.
+
+Centralizing these configurations makes them easier to manage and modify.
 """
 
 import os

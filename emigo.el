@@ -9,7 +9,7 @@
 ;; Copyright (C) 2025, Emigo, all rights reserved.
 ;; Created: 2025-03-29
 ;; Version: 0.5
-;; Last-Updated: Wed Apr  2 13:28:47 2025 (-0400)
+;; Last-Updated: Wed Apr  2 16:48:23 2025 (-0400)
 ;;           By: Mingde (Matthew) Zeng
 ;; Package-Requires: ((emacs "26.1") (transient "0.3.0") (compat "30.0.2.0"))
 ;; Keywords: ai emacs llm aider ai-pair-programming tools
@@ -539,6 +539,7 @@ Otherwise return nil."
     (define-key map (kbd "C-c C-l") #'emigo-ls-files-in-context)
     (define-key map (kbd "C-c C-y") #'emigo-clear-history)
     (define-key map (kbd "C-c C-h") #'emigo-show-history)
+    (define-key map (kbd "C-c C-k") #'emigo-cancel-interaction)
     (define-key map (kbd "S-<return>") #'emigo-send-newline)
     map)
   "Keymap used by `emigo-mode'.")
@@ -782,41 +783,26 @@ Display RESULT-TEXT and optionally offer to run COMMAND-STRING."
             (emigo--execute-command-sync session-path command-string))))))
 
 (defun emigo--replace-regions-sync (abs-path replacements-json-string)
-  "Replace multiple regions in ABS-PATH based on data in REPLACEMENTS-JSON-STRING.
+  "Replace multiple text regions in ABS-PATH based on SEARCH/REPLACE blocks.
 
-REPLACEMENTS-JSON-STRING is a JSON array of [start_line, end_line, replace_text] lists.
-Lines are 1-based. End line is exclusive. Applies changes from end to start.
+REPLACEMENTS-JSON-STRING is a JSON array of [search_text, replace_text] lists.
+Applies changes sequentially as provided by the LLM. It's assumed the LLM
+generates blocks that apply cleanly in order, replacing the *first* match
+for each search block.
 
 Design Principles:
-1. Batch Processing: All replacements for a file are processed in a single call
-   to minimize Python-Elisp round trips and file I/O operations.
-
-2. Bottom-Up Application:
-   - Replacements are sorted by start line in descending order
-   - Applied from end of file to beginning
-   - Ensures line numbers remain valid during batch processing
-   - Prevents the need to recalculate positions after each change
-
-3. Atomic Operation:
-   - File is only saved once after all replacements are applied
-   - Minimizes disk I/O and prevents partial updates
-
-4. Error Handling:
-   - Validates file is writable before starting
-   - Validates JSON parsing
-   - Returns t on success, error string on failure
-
-Performance Considerations:
-- Sorting replacements is O(n log n) but n is typically small (handful of changes)
-- Batch processing is much faster than individual file operations
-- Single file save at end is more efficient than multiple saves
+1. Batch Processing: All replacements for a file are processed in a single call.
+2. Sequential Application: Replacements are applied in the order they appear
+   in the list, replacing the first occurrence of each `search_text`.
+3. Atomic Operation: File is saved once after all replacements are applied.
+4. Error Handling: Validates file writability, JSON parsing, and search success.
+   Returns t on success, error string on failure.
 
 Usage Example (from Python side):
-  JSON payload: [[10, 12, \"new text\\n\"], [5, 7, \"other text\"]]
+  JSON payload: [[\"foo\", \"bar\"], [\"baz\", \"qux\"]]
   Will:
-  1. Replace lines 10-11 with \"new text\"
-  2. Replace lines 5-6 with \"other text\"
-  (Applied in reverse order to maintain line number validity)
+  1. Find first \"foo\", replace with \"bar\".
+  2. Find first \"baz\" (after the first replacement), replace with \"qux\".
 
 Returns t on success, error string on failure."
   (message "[Emigo] Starting multi-replace for %s" abs-path)
@@ -826,53 +812,55 @@ Returns t on success, error string on failure."
   ;; Parse JSON - handle both array and vector formats
   (let* ((json-array-type 'list) ;; Ensure JSON arrays become lists
          (replacements (json-read-from-string replacements-json-string))
-         ;; Sort replacements by start line in descending order
-         (sorted-replacements (sort (copy-sequence replacements)
-                                    (lambda (a b) (> (nth 0 a) (nth 0 b)))))
          (buffer (find-file-noselect abs-path))
-         (modified nil))
+         (modified nil)
+         (all-successful t)
+         (error-message nil))
     (message "[Emigo] Parsed %d replacements" (length replacements))
     (unless buffer
       (error "Could not find or open buffer for %s" abs-path))
 
     (with-current-buffer buffer
       (let ((inhibit-read-only t)) ;; Ensure we can modify
-        ;; Apply replacements from end to start
-        (dolist (replacement sorted-replacements) ;; replacement is a list [start end text]
-          (let ((start-line (nth 0 replacement))
-                (end-line (nth 1 replacement))
-                (replace-text (nth 2 replacement)))
-            (message "[Emigo] Applying replacement: lines %d-%d (%d chars)"
-                     start-line end-line (length replace-text))
-            ;; Go to the start position (beginning of start-line)
-            (goto-char (point-min))
-            (forward-line (1- start-line)) ;; 0-based movement
-            (let ((start-point (point)))
+        ;; Apply replacements sequentially
+        (goto-char (point-min)) ;; Start search from beginning for each block
+        (dolist (replacement replacements) ;; replacement is a list [search_text replace_text]
+          (unless all-successful (cl-return)) ;; Stop if a previous replacement failed
 
-              (goto-char (point-min))
-              (forward-line (1- end-line)) ;; Move to beginning of end-line
-              (let ((end-point (point)))
-                (message "[Emigo] Deleting region: %d-%d" start-point end-point)
-                ;; Delete the region
-                (delete-region start-point end-point)
-                ;; Insert the replacement text at the start position
-                (goto-char start-point)
-                (message "[Emigo] Inserting %d chars" (length replace-text))
-                (insert replace-text)
-                ;; Ensure newline at end if not present
-                (unless (looking-back "\n" 1)
-                  (insert "\n"))
-                ;; Mark buffer as modified for saving
-                (set-buffer-modified-p t)
-                (setq modified t))))))
-      ;; Save the buffer if modified
-      (when modified
-        (message "[Emigo] Saving buffer...")
-        (save-buffer buffer)
-        ;; Inform Emacs about the change (e.g., revert other buffers visiting this file)
-        (emigo--file-written-externally abs-path)
-        (message "[Emigo] Save successful")
-        t))))
+          (let ((search-text (nth 0 replacement))
+                (replace-text (nth 1 replacement)))
+            (message "[Emigo] Applying replacement: searching for %d chars, replacing with %d chars"
+                     (length search-text) (length replace-text))
+
+            ;; Search for the literal text
+            (if (search-forward search-text nil t) ;; t = no error if not found
+                (progn
+                  ;; Found it, replace the matched region
+                  (message "[Emigo] Found match at %d. Replacing..." (match-beginning 0))
+                  (replace-match replace-text t t) ;; t = fixed case, t = literal
+                  (set-buffer-modified-p t)
+                  (setq modified t)
+                  ;; Reset search position for next block
+                  (goto-char (point-min)))
+              ;; Not found
+              (progn
+                (setq all-successful nil)
+                (setq error-message (format "Search text not found for block:\n<<<<<<< SEARCH\n%s\n=======\n%s\n>>>>>>> REPLACE"
+                                            search-text replace-text))
+                (message "[Emigo] Error: %s" error-message)
+                (cl-return)))))) ;; Exit dolist
+
+      ;; Save the buffer only if all replacements were successful and modified
+      (if (and all-successful modified)
+          (progn
+            (message "[Emigo] Saving buffer...")
+            (save-buffer buffer)
+            ;; Inform Emacs about the change
+            (emigo--file-written-externally abs-path)
+            (message "[Emigo] Save successful")
+            t) ;; Return t for success
+        ;; Return error message or nil if not modified but successful (shouldn't happen with current logic)
+        (or error-message (unless modified t)))))) ;; Return error or t if no modifications needed
 
 (defun emigo--file-written-externally (abs-path)
   "Inform Emacs that the file at ABS-PATH was modified externally.
@@ -1032,6 +1020,23 @@ is handled by `emigo-call--sync \"get_history\" session-path`."
                             (if (equal role "user") "text" "markdown") ;; Basic language hint
                             (string-trim content)))))))
     (switch-to-buffer-other-window buf)))
+
+(defun emigo-cancel-interaction ()
+  "Cancel the currently running LLM interaction for this session."
+  (interactive)
+  (unless (emigo--is-emigo-buffer-p)
+    (error "Not in an Emigo buffer"))
+  (unless (emigo-epc-live-p emigo-epc-process)
+    (message "[Emigo] Process not running.")
+    (emigo-start-process)
+    (error "Emigo process was not running, please try again shortly."))
+
+  (unless emigo-session-path
+    (error "[Emigo] Could not determine session path from buffer"))
+
+  (message "[Emigo] Requesting cancellation for session: %s" (file-name-nondirectory emigo-session-path))
+  ;; Call the new Python EPC method asynchronously
+  (emigo-call-async "cancel_llm_interaction" emigo-session-path))
 
 (defun emigo-ls-files-in-context ()
   "List the files currently in the Emigo chat context for the current project."

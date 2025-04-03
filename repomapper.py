@@ -1,35 +1,58 @@
 #!/usr/bin/env python
 
 """
-Standalone script to generate a repository map similar to Aider's repomap feature.
+Repository Mapping and Analysis.
 
-Based on code from the Aider project: https://github.com/paul-gauthier/aider
+This module provides functionality to analyze a code repository, identify key
+definitions and references using tree-sitter, and generate a concise "map"
+of the codebase structure and relevant code snippets. This map is intended
+to be included in the context provided to a Large Language Model (LLM) to
+give it a better understanding of the project structure.
 
-This script generates a repository map, which is a concise representation of
-the codebase structure and relevant code snippets, intended to be included in
-the context provided to a Large Language Model (LLM).
+Based on code from the Aider project (https://github.com/paul-gauthier/aider),
+this module implements:
+- File discovery, respecting `.gitignore` and excluding binary/ignored files.
+- Tag generation (definitions and references) using tree-sitter queries and
+  pygments as a fallback.
+- Caching of tags using `diskcache` to speed up repeated analysis.
+- A ranking algorithm (PageRank) applied to the code dependency graph to
+  identify the most relevant files and code elements based on context
+  (e.g., files currently in chat, mentioned identifiers).
+- Rendering of ranked code snippets using `grep-ast`'s `TreeContext`.
+- Pruning the final map to fit within a specified token limit.
 
-Default Behavior (LLM Context):
-By default, the script performs a ranking algorithm (PageRank) based on code
-dependencies and context provided via command-line arguments (--chat-files,
---mentioned-files, --mentioned-idents). It then selects the most relevant
-code definitions and files, formats them into snippets using tree-sitter,
-and prunes the result to fit within a specified token limit (--map-tokens).
-This produces a concise, context-aware map suitable for LLM context windows.
-
---render-cache Behavior (Debugging/Inspection):
-When the --render-cache flag is used, the script bypasses the ranking and
-token-limiting steps. It loads all tags (definitions and references) from the
-cache directory and renders them using the same snippet-generation
-logic (TreeContext). This often results in showing large portions,
-or even the entirety, of the cached files. This mode is useful for
-inspecting the raw information captured by the tagger and the output of the
-rendering engine, but its output is generally too large and unfiltered for
-direct use as LLM context.
-
-Install dependencies:
-pip install networkx pygments grep-ast diskcache tiktoken tqdm gitignore_parser scipy
+The main class `RepoMapper` is intended to be used by `session.py` to manage
+the map generation for a specific user session. It also includes a command-line
+interface for standalone usage and debugging.
 """
+
+# Based on code from the Aider project: https://github.com/paul-gauthier/aider
+#
+# This script generates a repository map, which is a concise representation of
+# the codebase structure and relevant code snippets, intended to be included in
+# the context provided to a Large Language Model (LLM).
+#
+# Default Behavior (LLM Context):
+# By default, the script performs a ranking algorithm (PageRank) based on code
+# dependencies and context provided via command-line arguments (--chat-files,
+# --mentioned-files, --mentioned-idents). It then selects the most relevant
+# code definitions and files, formats them into snippets using tree-sitter,
+# and prunes the result to fit within a specified token limit (--map-tokens).
+# This produces a concise, context-aware map suitable for LLM context windows.
+#
+# --render-cache Behavior (Debugging/Inspection):
+# When the --render-cache flag is used, the script bypasses the ranking and
+# token-limiting steps. It loads all tags (definitions and references) from the
+# cache directory and renders them using the same snippet-generation
+# logic (TreeContext). This often results in showing large portions,
+# or even the entirety, of the cached files. This mode is useful for
+# inspecting the raw information captured by the tagger and the output of the
+# rendering engine, but its output is generally too large and unfiltered for
+# direct use as LLM context.
+#
+# Install dependencies:
+# pip install networkx pygments grep-ast diskcache tiktoken tqdm gitignore_parser scipy
+# """ # Keep the closing quote if it was intended for the module docstring above
 
 import argparse
 import math
@@ -172,8 +195,8 @@ class RepoMap:
         self.map_processing_time = 0
 
         if self.verbose:
-            print(f"RepoMap initialized for root: {self.root}")
-            print(f"Using map token limit: {self.max_map_tokens}")
+            print(f"RepoMap initialized for root: {self.root}", file=sys.stderr)
+            print(f"Using map token limit: {self.max_map_tokens}", file=sys.stderr)
 
     def token_count(self, text):
         """Counts tokens using the tiktoken tokenizer."""
@@ -187,10 +210,10 @@ class RepoMap:
     def get_repo_map(self, chat_files, other_files, mentioned_fnames=None, mentioned_idents=None):
         """Generates the repository map string."""
         if self.max_map_tokens <= 0:
-            print("Map tokens set to 0, skipping map generation.")
+            print("Map tokens set to 0, skipping map generation.", file=sys.stderr)
             return ""
         if not other_files and not chat_files: # Need at least some files to map
-            print("No files provided for repository map.")
+            print("No files provided for repository map.", file=sys.stderr)
             return ""
         # Combine chat_files and other_files for processing, but keep track of chat_files for ranking
         all_files = set(chat_files) | set(other_files)
@@ -204,20 +227,20 @@ class RepoMap:
             print("ERROR: Recursion error during map generation. Repo might be too large.")
             return ""
         except Exception as e:
-            print(f"ERROR: An unexpected error occurred during map generation: {e}")
+            print(f"ERROR: An unexpected error occurred during map generation: {e}", file=sys.stderr)
             import traceback
-            traceback.print_exc()
+            traceback.print_exc(file=sys.stderr)
             return ""
         end_time = time.time()
         self.map_processing_time = end_time - start_time
 
         if not files_listing:
-            print("No map content generated.")
+            print("No map content generated.", file=sys.stderr)
             return ""
 
         if self.verbose:
             num_tokens = self.token_count(files_listing)
-            print(f"Repo Map generated: {num_tokens} tokens, took {self.map_processing_time:.2f}s")
+            print(f"Repo Map generated: {num_tokens} tokens, took {self.map_processing_time:.2f}s", file=sys.stderr)
 
         # Determine prefix based on whether chat_files were provided
         if chat_files:
@@ -244,7 +267,7 @@ class RepoMap:
 
         # Try to recreate the cache
         try:
-            print(f"Attempting to recreate tags cache at {path}...")
+            print(f"Attempting to recreate tags cache at {path}...", file=sys.stderr)
             # Delete existing cache dir
             if path.exists():
                 shutil.rmtree(path)
@@ -260,7 +283,7 @@ class RepoMap:
 
             # If we got here, the new cache works
             self.TAGS_CACHE = new_cache
-            print("Successfully recreated tags cache.")
+            print("Successfully recreated tags cache.", file=sys.stderr)
             return
 
         except SQLITE_ERRORS as e:
@@ -281,7 +304,7 @@ class RepoMap:
             # Basic check to see if cache is usable
             _ = len(self.TAGS_CACHE)
             if self.verbose:
-                print(f"Using disk cache at {path}")
+                print(f"Using disk cache at {path}", file=sys.stderr)
         except SQLITE_ERRORS as e:
             self.tags_cache_error(e)
         except Exception as e:
@@ -338,7 +361,7 @@ class RepoMap:
 
         # Cache miss or invalid data
         if self.verbose:
-            print(f"Cache miss for {rel_fname}, generating tags...")
+            print(f"Cache miss for {rel_fname}, generating tags...", file=sys.stderr)
         data = list(self.get_tags_raw(fname, rel_fname))
 
         # Update the cache with both mtime and current time
@@ -351,7 +374,7 @@ class RepoMap:
             self.TAGS_CACHE[cache_key] = cache_entry
             self.save_tags_cache()
             if self.verbose:
-                print(f"Updated cache for {rel_fname} with mtime {file_mtime}")
+                print(f"Updated cache for {rel_fname} with mtime {file_mtime}", file=sys.stderr)
         except SQLITE_ERRORS as e:
             self.tags_cache_error(e)
             # Try saving again if cache was reset to dict
@@ -439,9 +462,9 @@ class RepoMap:
         # If we saw only defs (or no SCM query ran), use pygments for refs
         if saw_defs and not saw_refs or not query_scm:
             if self.verbose and not query_scm:
-                 print(f"Using pygments for refs in {rel_fname} (no SCM query)")
+                 print(f"Using pygments for refs in {rel_fname} (no SCM query)", file=sys.stderr)
             elif self.verbose and saw_defs and not saw_refs:
-                 print(f"Using pygments to supplement refs in {rel_fname}")
+                 print(f"Using pygments to supplement refs in {rel_fname}", file=sys.stderr)
 
             try:
                 lexer = guess_lexer_for_filename(fname, code)
@@ -474,9 +497,9 @@ class RepoMap:
         chat_rel_fnames = set(get_rel_fname(fname, self.root) for fname in chat_fnames)
         mentioned_rel_fnames = set(get_rel_fname(fname, self.root) for fname in mentioned_fnames)
 
-        print("Scanning files and building graph...")
+        print("Scanning files and building graph...", file=sys.stderr)
         # Use tqdm for progress if available
-        fnames_iter = tqdm(sorted(list(all_fnames)), desc="Scanning", unit="file") if 'tqdm' in sys.modules else sorted(list(all_fnames))
+        fnames_iter = tqdm(sorted(list(all_fnames)), desc="Scanning", unit="file", file=sys.stderr) if 'tqdm' in sys.modules else sorted(list(all_fnames))
 
         # Calculate base personalization value
         num_nodes_estimate = len(all_fnames)
@@ -517,18 +540,18 @@ class RepoMap:
 
         # If no references found (e.g., only C++ defs), use defines as refs for graph
         if not references and defines:
-            print("No references found, using definitions for graph linking.")
+            print("No references found, using definitions for graph linking.", file=sys.stderr)
             references = {k: list(v) for k, v in defines.items()}
 
         idents = set(defines.keys()).intersection(set(references.keys()))
         if not idents:
-            print("No common identifiers found between definitions and references. Map may be incomplete.")
+            print("No common identifiers found between definitions and references. Map may be incomplete.", file=sys.stderr)
             # Still proceed to rank files based on structure if possible
 
         G = nx.MultiDiGraph()
 
-        print("Building dependency graph...")
-        idents_iter = tqdm(idents, desc="Linking", unit="ident") if 'tqdm' in sys.modules else idents
+        print("Building dependency graph...", file=sys.stderr)
+        idents_iter = tqdm(idents, desc="Linking", unit="ident", file=sys.stderr) if 'tqdm' in sys.modules else idents
         for ident in idents_iter:
             definers = defines[ident]
 
@@ -551,7 +574,7 @@ class RepoMap:
                     G.add_edge(referencer, definer, weight=mul * weight, ident=ident) # Apply multiplier here
 
         if not G.edges():
-             print("Graph has no edges. Ranking will be based on file structure only.")
+             print("Graph has no edges. Ranking will be based on file structure only.", file=sys.stderr)
              # Add all files as nodes so PageRank doesn't fail
              for fname in all_fnames:
                  rel_fname = get_rel_fname(fname, self.root)
@@ -559,13 +582,13 @@ class RepoMap:
                      G.add_node(rel_fname)
 
 
-        print("Running PageRank...")
+        print("Running PageRank...", file=sys.stderr)
         pers_args = dict()
         if personalization:
              # Use personalization if context was provided
              pers_args = dict(personalization=personalization, dangling=personalization)
              if self.verbose:
-                 print(f"Using personalization: {personalization}")
+                 print(f"Using personalization: {personalization}", file=sys.stderr)
 
         try:
             ranked = nx.pagerank(G, weight="weight", **pers_args)
@@ -593,8 +616,8 @@ class RepoMap:
         # Distribute rank from files to the definitions within them
         ranked_definitions = defaultdict(float)
         if G.edges(): # Only distribute if graph has structure
-            print("Distributing rank to definitions...")
-            nodes_iter = tqdm(G.nodes(), desc="Distributing", unit="node") if 'tqdm' in sys.modules else G.nodes()
+            print("Distributing rank to definitions...", file=sys.stderr)
+            nodes_iter = tqdm(G.nodes(), desc="Distributing", unit="node", file=sys.stderr) if 'tqdm' in sys.modules else G.nodes()
             for src in nodes_iter:
                 src_rank = ranked.get(src, 0) # Use .get for safety
                 # Calculate total weight of outgoing edges *from this source*
@@ -609,7 +632,7 @@ class RepoMap:
                             rank_share = src_rank * weight / total_weight
                             ranked_definitions[(dst, ident)] += rank_share
         else:
-             print("Skipping rank distribution (no graph edges).")
+             print("Skipping rank distribution (no graph edges).", file=sys.stderr)
 
 
         # Collect ranked tags
@@ -679,8 +702,8 @@ class RepoMap:
         # Combine: special files first, then the ranked tags/files
         combined_ranked_items = special_fnames_to_add + ranked_tags
 
-        print(f"Total ranked items (tags/files) considered for map: {len(combined_ranked_items)}")
-        print("Finding optimal map size for token limit...")
+        print(f"Total ranked items (tags/files) considered for map: {len(combined_ranked_items)}", file=sys.stderr)
+        print("Finding optimal map size for token limit...", file=sys.stderr)
 
         num_items = len(combined_ranked_items)
         lower_bound = 0
@@ -713,19 +736,19 @@ class RepoMap:
                     break # No items to process
 
 
-            print(f"  Trying {middle}/{num_items} items...")
+            print(f"  Trying {middle}/{num_items} items...", file=sys.stderr)
             # Pass chat_rel_fnames to to_tree to ensure they are excluded from the output map
             chat_rel_fnames = set(get_rel_fname(fname, self.root) for fname in chat_fnames)
             tree = self.to_tree(current_items, chat_rel_fnames)
             num_tokens = self.token_count(tree)
-            print(f"    Tokens: {num_tokens}/{max_map_tokens}")
+            print(f"    Tokens: {num_tokens}/{max_map_tokens}", file=sys.stderr)
 
             # Check if this is the best result so far that fits
             if num_tokens <= max_map_tokens:
                 if num_tokens > best_tree_tokens:
                     best_tree = tree
                     best_tree_tokens = num_tokens
-                    print(f"    New best map found ({best_tree_tokens} tokens)")
+                    print(f"    New best map found ({best_tree_tokens} tokens)", file=sys.stderr)
 
                 # If it fits, try including more items
                 lower_bound = middle + 1
@@ -738,11 +761,11 @@ class RepoMap:
 
             # Optimization: If the best map is already close to the limit, stop early
             if best_tree_tokens > max_map_tokens * 0.95:
-                 print("    Best map is close to token limit, stopping search.")
+                 print("    Best map is close to token limit, stopping search.", file=sys.stderr)
                  break
 
 
-        print(f"Selected map size: {best_tree_tokens} tokens")
+        print(f"Selected map size: {best_tree_tokens} tokens", file=sys.stderr)
         return best_tree
 
     def render_tree(self, abs_fname, rel_fname, lois):
@@ -910,7 +933,7 @@ class RepoMapper:
                 return gitignore(path)
         except ImportError:
             if self.verbose:
-                print("Note: gitignore_parser not installed, .gitignore checking disabled")
+                print("Note: gitignore_parser not installed, .gitignore checking disabled", file=sys.stderr)
         return False
 
     def _find_src_files(self, directory):
@@ -925,7 +948,7 @@ class RepoMapper:
 
         src_files = []
         if self.verbose:
-            print(f"Scanning directory: {directory}")
+            print(f"Scanning directory: {directory}", file=sys.stderr)
         for root, dirs, files in os.walk(directory, topdown=True):
             # Filter directories
             # Use imported IGNORED_DIRS from config
@@ -949,7 +972,7 @@ class RepoMapper:
                 src_files.append(file_path)
 
         if self.verbose:
-            print(f"Found {len(src_files)} potential source files.")
+            print(f"Found {len(src_files)} potential source files.", file=sys.stderr)
         return src_files
 
     def generate_map(self, chat_files=None, mentioned_files=None, mentioned_idents=None, force_refresh=None):
@@ -973,7 +996,7 @@ class RepoMapper:
         # Update map generation time
         self.map_generation_time = time.time()
         if self.verbose:
-            print(f"Map generation started at: {self.map_generation_time}")
+            print(f"Map generation started at: {self.map_generation_time}", file=sys.stderr)
 
         # Resolve paths relative to root
         def resolve_path(p):
@@ -992,7 +1015,7 @@ class RepoMapper:
         all_repo_files = self._find_src_files(self.root)
         if not all_repo_files:
             if self.verbose:
-                print(f"No source files found in directory: {self.root}")
+                print(f"No source files found in directory: {self.root}", file=sys.stderr)
             return ""
 
         # Determine other_files by removing chat_files
@@ -1008,7 +1031,7 @@ class RepoMapper:
         )
 
         if self.verbose:
-            print(f"Map generation completed at: {time.time()}")
+            print(f"Map generation completed at: {time.time()}", file=sys.stderr)
         return map_content
 
     def render_cache(self):
@@ -1016,13 +1039,13 @@ class RepoMapper:
         cache_path = Path(self.root) / TAGS_CACHE_DIR
         if not cache_path.exists() or not cache_path.is_dir():
             if self.verbose:
-                print(f"Error: Cache directory not found at {cache_path}")
+                print(f"Error: Cache directory not found at {cache_path}", file=sys.stderr)
             return ""
 
         try:
             cache = Cache(cache_path)
             if self.verbose:
-                print(f"Found {len(cache)} items in cache.")
+                print(f"Found {len(cache)} items in cache.", file=sys.stderr)
 
             all_tags = []
             all_cached_fnames = set()
@@ -1040,7 +1063,7 @@ class RepoMapper:
                         all_tags.extend(cached_item.get("data", []))
                 except Exception as e:
                     if self.verbose:
-                        print(f"Warning: Error processing cache key {key}: {e}")
+                        print(f"Warning: Error processing cache key {key}: {e}", file=sys.stderr)
 
             # Create temporary RepoMap for rendering
             temp_mapper = RepoMap(
@@ -1063,7 +1086,7 @@ class RepoMapper:
 
         except Exception as e:
             if self.verbose:
-                print(f"Error rendering cache: {e}")
+                print(f"Error rendering cache: {e}", file=sys.stderr)
             return ""
 
 
@@ -1139,11 +1162,11 @@ def main():
     if args.render_cache:
         content = mapper.render_cache()
         if content:
-            print("\n--- Rendered Cache Map ---")
-            print(content)
-            print("--- End Rendered Cache Map ---")
+            print("\n--- Rendered Cache Map ---", file=sys.stderr)
+            print(content, file=sys.stderr) # Print cache content to stderr for inspection
+            print("--- End Rendered Cache Map ---", file=sys.stderr)
         else:
-            print("Failed to render cache.")
+            print("Failed to render cache.", file=sys.stderr)
         return
 
     content = mapper.generate_map(
@@ -1157,18 +1180,17 @@ def main():
             try:
                 with open(args.output, "w", encoding="utf-8") as f:
                     f.write(content)
-                print(f"Repository map written to: {args.output}")
+                print(f"Repository map written to: {args.output}", file=sys.stderr)
             except IOError as e:
-                print(f"Error writing map: {e}")
-                print("\n--- Repository Map ---")
-                print(content)
-                print("--- End Repository Map ---")
+                print(f"Error writing map: {e}", file=sys.stderr)
+                print("\n--- Repository Map ---", file=sys.stderr)
+                print(content, file=sys.stderr) # Print map to stderr if file write fails
+                print("--- End Repository Map ---", file=sys.stderr)
         else:
-            print("\n--- Repository Map ---")
+            # Print final map to stdout if no output file specified
             print(content)
-            print("--- End Repository Map ---")
     else:
-        print("Failed to generate repository map.")
+        print("Failed to generate repository map.", file=sys.stderr)
 
 
 

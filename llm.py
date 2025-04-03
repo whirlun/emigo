@@ -1,8 +1,16 @@
 #!/usr/bin/env python
 
 """
-Simplified LLM client using litellm to interact with language models
-and manage chat history.
+LLM Client Wrapper using LiteLLM.
+
+Provides a simplified interface (`LLMClient`) for interacting with various
+Large Language Models (LLMs) supported by the `litellm` library. It handles
+API calls, streaming responses, and basic configuration (model name, API keys,
+base URLs).
+
+Note: This client is designed to be stateless regarding chat history. The
+calling process (e.g., `llm_worker.py`) is responsible for managing and
+passing the complete message history for each API call.
 """
 
 import datetime # Keep for potential future use, but time.time() is simpler for timestamp
@@ -11,7 +19,7 @@ import os
 import sys
 import time
 import warnings
-from typing import Dict, Iterator, List, Optional, Union, Tuple # Added Tuple
+from typing import Dict, Iterator, List, Optional, Union # Removed Tuple
 
 # Filter out UserWarning from pydantic used by litellm
 warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
@@ -103,30 +111,6 @@ class LLMClient:
         self.api_key = api_key
         self.base_url = base_url
         self.verbose = verbose
-        # Store history as list of (timestamp, message_dict) tuples
-        self.chat_history: List[Tuple[float, Dict]] = []
-
-    def get_history(self) -> List[Tuple[float, Dict]]:
-        """Returns the current chat history as a list of (timestamp, message_dict) tuples."""
-        return self.chat_history
-
-    def set_history(self, history: List[Dict]):
-        """Sets the chat history from a list of message dictionaries, adding timestamps."""
-        current_time = time.time()
-        # Add timestamp to each message when setting the history
-        self.chat_history = [(current_time, dict(msg)) for msg in history] # Store copies of messages
-
-    def append_history(self, message: Dict):
-        """Appends a single message dictionary with a timestamp to the chat history."""
-        if "role" not in message or "content" not in message:
-            raise ValueError("Message must have 'role' and 'content' keys")
-        # Append a tuple: (current_timestamp, message_copy)
-        self.chat_history.append((time.time(), dict(message))) # Store a copy
-
-    def clear_history(self):
-        """Clears the chat history."""
-        self.chat_history = []
-        print("Chat history cleared.", file=sys.stderr)
 
     def send(
         self,
@@ -221,42 +205,41 @@ def main():
 
     client = LLMClient(model_name=model, api_key=api_key, base_url=base_url, verbose=True)
 
-    # 1. Add initial system message (example)
-    client.append_history({"role": "system", "content": "You are a helpful assistant."})
+    # Example messages list (history is managed externally)
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What is the capital of France?"}
+    ]
+    print(f"\nUser: {messages[-1]['content']}")
 
-    # 2. Add user message
-    user_input = "What is the capital of France?"
-    client.append_history({"role": "user", "content": user_input})
-    print(f"\nUser: {user_input}")
-
-    # 3. Send the current history to the LLM (non-streaming)
+    # Send the messages list (non-streaming)
     print("\nAssistant (non-streaming):")
-    assistant_response = client.send(client.get_history(), stream=False)
+    assistant_response = client.send(messages, stream=False)
     print(assistant_response)
 
-    # 4. Add assistant's response to history
-    client.append_history({"role": "assistant", "content": assistant_response})
+    # Add assistant's response to the external history list
+    messages.append({"role": "assistant", "content": assistant_response})
 
-    # 5. Add another user message
+    # Add another user message
     user_input_2 = "What about Spain?"
-    client.append_history({"role": "user", "content": user_input_2})
+    messages.append({"role": "user", "content": user_input_2})
     print(f"\nUser: {user_input_2}")
 
-    # 6. Send again (streaming)
+    # Send again (streaming)
     print("\nAssistant (streaming):")
     full_streamed_response = ""
-    response_stream = client.send(client.get_history(), stream=True)
+    response_stream = client.send(messages, stream=True)
     for chunk in response_stream:
         print(chunk, end="", flush=True)
         full_streamed_response += chunk
     print() # Newline after stream
 
-    # 7. Add streamed response to history
-    client.append_history({"role": "assistant", "content": full_streamed_response})
+    # Add streamed response to the external history list
+    messages.append({"role": "assistant", "content": full_streamed_response})
 
-    print("\n--- Final History ---")
+    print("\n--- Final Messages List ---")
     import json
-    print(json.dumps(client.get_history(), indent=2))
+    print(json.dumps(messages, indent=2))
 
 
 if __name__ == "__main__":

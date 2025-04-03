@@ -6,13 +6,7 @@
 
 Emigo brings AI-powered development to Emacs, integrating large language models directly into your workflow. Inspired by the capabilities of tools like [Aider](https://github.com/paul-gauthier/aider) and [Cline](https://github.com/sturdy-dev/cline), and the spiritual successor of [Aidermacs](https://github.com/MatthewZMD/aidermacs), Emigo acts as an **agentic** AI assistant. It leverages **tool use** to interact with your project, read files, write code, execute commands, and more, all within Emacs.
 
-## Development Status
-
-⚠️ **Beta Warning**: Emigo is under active development. Expect:
-
-- Breaking API changes
-- Unstable features
-- Incomplete documentation
+## ⚠️ Emigo is under very active development. Expect breaking changes, unstable features, incomplete documentation
 
 Please use only for testing and development. Report issues - your feedback helps shape Emigo!
 
@@ -41,7 +35,7 @@ Please use only for testing and development. Report issues - your feedback helps
       (emigo-enable) ;; Starts the background process automatically
       :custom
       ;; Encourage using OpenRouter with Deepseek
-      (emigo-model "openrouter/deepseek/deepseek-chat-v3-0324"")
+      (emigo-model "openrouter/deepseek/deepseek-chat-v3-0324")
       (emigo-base-url "https://openrouter.ai/api/v1")
       ;; Securely load your API key (replace with your preferred method)
       (emigo-api-key (emigo-read-file-content "~/.config/openrouter/key.txt")))
