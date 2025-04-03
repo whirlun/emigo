@@ -28,7 +28,9 @@ import tiktoken
 from typing import Dict, List, Optional, Tuple
 
 from repomapper import RepoMapper
-from utils import *
+from utils import (
+     eval_in_emacs, _filter_environment_details
+ )
 
 class Session:
     """Encapsulates the state and operations for a single Emigo session."""
