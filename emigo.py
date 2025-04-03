@@ -53,10 +53,8 @@ import json
 import queue
 import time
 from typing import Dict, List, Optional, Tuple
-import logging # Import logging
 from system_prompt import (
-    TOOL_RESULT_SUCCESS, TOOL_RESULT_OUTPUT_PREFIX,
-    TOOL_DENIED, TOOL_ERROR_PREFIX, TOOL_ERROR_SUFFIX,
+    TOOL_DENIED,
     # Tool Names
     TOOL_EXECUTE_COMMAND, TOOL_READ_FILE, TOOL_WRITE_TO_FILE,
     TOOL_REPLACE_IN_FILE, TOOL_SEARCH_FILES, TOOL_LIST_FILES,

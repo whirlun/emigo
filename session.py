@@ -165,7 +165,6 @@ class Session:
         # --- Repository Map / Basic File Listing ---
         # Use cached map if available, otherwise generate/show structure
         if self.caches['last_repomap']:
-            details += "# Repository Map (Cached)\n"
             details += f"```\n{self.caches['last_repomap']}\n```\n\n"
         else:
             # If repomap hasn't been generated yet, show recursive directory listing

@@ -13,7 +13,6 @@ calling process (e.g., `llm_worker.py`) is responsible for managing and
 passing the complete message history for each API call.
 """
 
-import datetime # Keep for potential future use, but time.time() is simpler for timestamp
 import importlib
 import os
 import sys
@@ -177,18 +176,36 @@ class LLMClient:
                     message = response.choices[0].message
                     return message.content or ""
                 else:
-                    print("Warning: Received empty or invalid response from LLM.", file=sys.stderr)
+                    print("Warning: Received empty or invalid non-streaming response from LLM.", file=sys.stderr)
                     return ""
 
-        except Exception as e:
-            # Catch potential exceptions from litellm (API errors, connection issues, etc.)
-            print(f"\nError during LLM communication: {e}", file=sys.stderr)
-            # Depending on the error type, you might want to raise it or handle differently
-            # For simplicity, we'll return an empty response or re-raise
+        except litellm.APIConnectionError as e:
+            # Handle connection errors specifically (like the OpenRouterException)
+            error_message = f"API Connection Error: {e}"
+            print(f"\n{error_message}", file=sys.stderr)
+            # Optionally log the messages sent for debugging
+            # print(f"Messages sent: {messages}", file=sys.stderr)
             if stream:
-                return iter([]) # Return an empty iterator on error for streaming
+                # Yield the error message as part of the stream
+                def error_stream():
+                    yield f"[LLM Error: {error_message}]"
+                return error_stream()
             else:
-                return "" # Return an empty string on error for non-streaming
+                return f"[LLM Error: {error_message}]" # Return error message directly
+
+        except Exception as e:
+            # Catch other potential exceptions from litellm
+            error_message = f"General Error during LLM communication: {e}"
+            print(f"\n{error_message}", file=sys.stderr)
+            # Optionally log the messages sent for debugging
+            # print(f"Messages sent: {messages}", file=sys.stderr)
+            if stream:
+                 # Yield the error message as part of the stream
+                def error_stream():
+                    yield f"[LLM Error: {error_message}]"
+                return error_stream()
+            else:
+                return f"[LLM Error: {error_message}]" # Return error message directly
 
 
 # --- Example Usage (Optional) ---

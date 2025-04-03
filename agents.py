@@ -12,7 +12,6 @@ import json # Keep for parsing LLM responses if needed
 import os
 import re
 import sys
-import threading # Keep for self.lock
 import traceback
 from typing import List, Dict, Optional, Tuple
 
@@ -32,8 +31,6 @@ from utils import (
     get_os_name,
     eval_in_emacs
 )
-from config import IGNORED_DIRS # Keep for potential future use if needed locally
-
 
 class Agents:
     """

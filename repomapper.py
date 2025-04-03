@@ -242,13 +242,7 @@ class RepoMap:
             num_tokens = self.token_count(files_listing)
             print(f"Repo Map generated: {num_tokens} tokens, took {self.map_processing_time:.2f}s", file=sys.stderr)
 
-        # Determine prefix based on whether chat_files were provided
-        if chat_files:
-            other = "other "
-        else:
-            other = ""
-
-        repo_content = f"Repository Map ({other}files):\n" # Use a consistent prefix
+        repo_content = "Repository Map:\n" # Use a consistent prefix
 
         if self.verbose:
             num_tokens = self.token_count(files_listing)
