@@ -28,6 +28,7 @@ import sys
 import json
 import re
 import traceback
+import difflib
 from typing import Dict, List, Tuple, Optional
 
 # Import Session class for type hinting and accessing session state
@@ -85,9 +86,30 @@ def read_file(session: Session, params: Dict[str, str]) -> str:
     abs_path = _resolve_path(session.session_path, rel_path)
     posix_rel_path = _posix_path(rel_path)
 
+    # --- Fuzzy Matching Pre-check ---
+    similarity_threshold = 0.85 # Configurable threshold
+    context_lines = 3 # For error reporting
+
     try:
         if not os.path.isfile(abs_path):
              return _format_tool_error(f"File not found: {posix_rel_path}")
+
+        # Get current file content from cache for fuzzy matching
+        file_content = session.get_cached_content(rel_path)
+        if file_content is None:
+            # Attempt to read if not cached (should ideally be cached by read_file or add_file)
+            print(f"Warning: File content for '{rel_path}' not in cache during replace. Attempting read.", file=sys.stderr)
+            try:
+                file_content = read_file_content(abs_path)
+                if file_content is None: # Check if read_file_content itself failed
+                     raise IOError("Failed to read file content.")
+                # Update cache if read was successful
+                session._update_file_cache(rel_path, content=file_content)
+            except Exception as read_err:
+                 return _format_tool_error(f"Error reading file content for replacement pre-check: {read_err}")
+
+        if file_content.startswith("# Error"): # Check if cached content is an error message
+            return _format_tool_error(f"Cannot perform replacement. Previous error reading/caching file: {posix_rel_path}. Please use read_file again.")
 
         # Add file to context list (Session class handles duplicates)
         added, add_msg = session.add_file_to_context(abs_path) # Use abs_path here
@@ -185,9 +207,30 @@ def replace_in_file(session: Session, params: Dict[str, str]) -> str:
     abs_path = _resolve_path(session.session_path, rel_path)
     posix_rel_path = _posix_path(rel_path)
 
+    # --- Fuzzy Matching Pre-check ---
+    similarity_threshold = 0.85 # Configurable threshold
+    context_lines = 3 # For error reporting
+
     try:
         if not os.path.isfile(abs_path):
             return _format_tool_error(f"File not found: {posix_rel_path}. Please ensure it's added to the chat first.")
+
+        # Get current file content from cache for fuzzy matching
+        file_content = session.get_cached_content(rel_path)
+        if file_content is None:
+            # Attempt to read if not cached (should ideally be cached by read_file or add_file)
+            print(f"Warning: File content for '{rel_path}' not in cache during replace. Attempting read.", file=sys.stderr)
+            try:
+                file_content = read_file_content(abs_path)
+                if file_content is None: # Check if read_file_content itself failed
+                     raise IOError("Failed to read file content.")
+                # Update cache if read was successful
+                session._update_file_cache(rel_path, content=file_content)
+            except Exception as read_err:
+                 return _format_tool_error(f"Error reading file content for replacement pre-check: {read_err}")
+
+        if file_content.startswith("# Error"): # Check if cached content is an error message
+            return _format_tool_error(f"Cannot perform replacement. Previous error reading/caching file: {posix_rel_path}. Please use read_file again.")
 
         # Parse *all* diff blocks from the input string
         parsed_blocks, parse_error = _parse_search_replace_blocks(diff_str)
@@ -196,6 +239,46 @@ def replace_in_file(session: Session, params: Dict[str, str]) -> str:
         if not parsed_blocks:
             # If parsing failed but there was input, return specific error
             return _format_tool_error("No valid SEARCH/REPLACE blocks found in the diff.")
+
+        # Perform fuzzy matching check for each block
+        fuzzy_errors = []
+        file_lines = file_content.splitlines(keepends=True) # Keep endings for context snippets
+
+        for i, (search_text, _) in enumerate(parsed_blocks):
+            if not search_text: # Cannot match empty string
+                fuzzy_errors.append(f"Block {i+1}: SEARCH block is empty.")
+                continue # Skip this block
+
+            # Use SequenceMatcher for fuzzy comparison
+            matcher = difflib.SequenceMatcher(None, file_content, search_text, autojunk=False)
+            # Find the best matching block
+            match = matcher.find_longest_match(0, len(file_content), 0, len(search_text))
+            # Use ratio() which considers the whole strings for similarity
+            match_ratio = matcher.ratio()
+
+            print(f"Block {i+1} Fuzzy Check for '{posix_rel_path}': Ratio: {match_ratio:.2f}", file=sys.stderr)
+
+            if match_ratio < similarity_threshold:
+                # Provide context around the best (but failed) match character index
+                error_char_index = match.a
+                error_line_num = file_content.count('\n', 0, error_char_index) + 1
+                start_ctx_line_idx = max(0, error_line_num - 1 - context_lines)
+                end_ctx_line_idx = min(len(file_lines), error_line_num + context_lines)
+                context_snippet = "".join(file_lines[start_ctx_line_idx:end_ctx_line_idx])
+                fuzzy_errors.append(
+                    f"Block {i+1}: SEARCH text does not match current file content well enough "
+                    f"(similarity {match_ratio:.2f} < threshold {similarity_threshold:.2f}). "
+                    f"The file '{posix_rel_path}' may have changed.\n"
+                    f"Context near best match (line ~{error_line_num}):\n"
+                    f"```\n{context_snippet}\n```"
+                )
+
+        if fuzzy_errors:
+            error_header = f"Failed fuzzy matching pre-check for '{posix_rel_path}':\n"
+            error_details = "\n\n".join(fuzzy_errors)
+            error_footer = "\nPlease use read_file to get the exact current content and try again with updated SEARCH blocks."
+            return _format_tool_error(error_header + error_details + error_footer)
+        # --- End Fuzzy Matching Pre-check ---
 
         # Call Elisp function `emigo--replace-regions-sync` to perform replacements
         try:
