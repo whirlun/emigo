@@ -9,7 +9,7 @@
 ;; Copyright (C) 2025, Emigo, all rights reserved.
 ;; Created: 2025-03-29
 ;; Version: 0.5
-;; Last-Updated: Thu Apr  3 13:40:03 2025 (-0400)
+;; Last-Updated: Thu Apr  3 17:18:03 2025 (-0400)
 ;;           By: Mingde (Matthew) Zeng
 ;; Package-Requires: ((emacs "26.1") (transient "0.3.0") (compat "30.0.2.0") (markdown-mode "2.6"))
 ;; Keywords: ai emacs llm aider ai-pair-programming tools
@@ -80,7 +80,6 @@
              (emigo-epc-define-method mngr 'file-written-externally 'emigo--file-written-externally)
              (emigo-epc-define-method mngr 'agent-finished 'emigo--agent-finished)
              (emigo-epc-define-method mngr 'execute-command-sync 'emigo--execute-command-sync)
-             (emigo-epc-define-method mngr 'read-file-content-sync 'emigo--read-file-content-sync)
              (emigo-epc-define-method mngr 'list-files-sync 'emigo--list-files-sync)
              (emigo-epc-define-method mngr 'search-files-sync 'emigo--search-files-sync)
              (emigo-epc-define-method mngr 'flush-buffer 'emigo-flush-buffer)
@@ -909,27 +908,9 @@ Display RESULT-TEXT and optionally offer to run COMMAND-STRING."
             (emigo--execute-command-sync session-path command-string))))))
 
 (defun emigo--replace-regions-sync (abs-path replacements-json-string)
-  "Replace multiple text regions in ABS-PATH based on SEARCH/REPLACE blocks.
-
-REPLACEMENTS-JSON-STRING is a JSON array of [search_text, replace_text] lists.
-Applies changes sequentially as provided by the LLM. It's assumed the LLM
-generates blocks that apply cleanly in order, replacing the *first* match
-for each search block.
-
-Design Principles:
-1. Batch Processing: All replacements for a file are processed in a single call.
-2. Sequential Application: Replacements are applied in the order they appear
-   in the list, replacing the first occurrence of each `search_text`.
-3. Atomic Operation: File is saved once after all replacements are applied.
-4. Error Handling: Validates file writability, JSON parsing, and search success.
-   Returns t on success, error string on failure.
-
-Usage Example (from Python side):
-  JSON payload: [[\"foo\", \"bar\"], [\"baz\", \"qux\"]]
-  Will:
-  1. Find first \"foo\", replace with \"bar\".
-  2. Find first \"baz\" (after the first replacement), replace with \"qux\".
-
+  "Replace multiple regions in ABS-PATH based on data in REPLACEMENTS-JSON-STRING.
+REPLACEMENTS-JSON-STRING is a JSON array of [start_line, end_line, replace_text] lists.
+Lines are 1-based. End line is exclusive. Applies changes from end to start.
 Returns t on success, error string on failure."
   (message "[Emigo] Starting multi-replace for %s" abs-path)
   (unless (file-writable-p abs-path)
@@ -938,55 +919,53 @@ Returns t on success, error string on failure."
   ;; Parse JSON - handle both array and vector formats
   (let* ((json-array-type 'list) ;; Ensure JSON arrays become lists
          (replacements (json-read-from-string replacements-json-string))
+         ;; Sort replacements by start line in descending order
+         (sorted-replacements (sort (copy-sequence replacements)
+                                    (lambda (a b) (> (nth 0 a) (nth 0 b)))))
          (buffer (find-file-noselect abs-path))
-         (modified nil)
-         (all-successful t)
-         (error-message nil))
+         (modified nil))
     (message "[Emigo] Parsed %d replacements" (length replacements))
     (unless buffer
       (error "Could not find or open buffer for %s" abs-path))
 
     (with-current-buffer buffer
       (let ((inhibit-read-only t)) ;; Ensure we can modify
-        ;; Apply replacements sequentially
-        (goto-char (point-min)) ;; Start search from beginning for each block
-        (dolist (replacement replacements) ;; replacement is a list [search_text replace_text]
-          (unless all-successful (cl-return)) ;; Stop if a previous replacement failed
+        ;; Apply replacements from end to start
+        (dolist (replacement sorted-replacements) ;; replacement is a list [start end text]
+          (let ((start-line (nth 0 replacement))
+                (end-line (nth 1 replacement))
+                (replace-text (nth 2 replacement)))
+            (message "[Emigo] Applying replacement: lines %d-%d (%d chars)"
+                     start-line end-line (length replace-text))
+            ;; Go to the start position (beginning of start-line)
+            (goto-char (point-min))
+            (forward-line (1- start-line)) ;; 0-based movement
+            (let ((start-point (point)))
 
-          (let ((search-text (nth 0 replacement))
-                (replace-text (nth 1 replacement)))
-            (message "[Emigo] Applying replacement: searching for %d chars, replacing with %d chars"
-                     (length search-text) (length replace-text))
-
-            ;; Search for the literal text
-            (if (search-forward search-text nil t) ;; t = no error if not found
-                (progn
-                  ;; Found it, replace the matched region
-                  (message "[Emigo] Found match at %d. Replacing..." (match-beginning 0))
-                  (replace-match replace-text t t) ;; t = fixed case, t = literal
-                  (set-buffer-modified-p t)
-                  (setq modified t)
-                  ;; Reset search position for next block
-                  (goto-char (point-min)))
-              ;; Not found
-              (progn
-                (setq all-successful nil)
-                (setq error-message (format "Search text not found for block:\n<<<<<<< SEARCH\n%s\n=======\n%s\n>>>>>>> REPLACE"
-                                            search-text replace-text))
-                (message "[Emigo] Error: %s" error-message)
-                (cl-return)))))) ;; Exit dolist
-
-      ;; Save the buffer only if all replacements were successful and modified
-      (if (and all-successful modified)
-          (progn
-            (message "[Emigo] Saving buffer...")
-            (save-buffer buffer)
-            ;; Inform Emacs about the change
-            (emigo--file-written-externally abs-path)
-            (message "[Emigo] Save successful")
-            t) ;; Return t for success
-        ;; Return error message or nil if not modified but successful (shouldn't happen with current logic)
-        (or error-message (unless modified t)))))) ;; Return error or t if no modifications needed
+              (goto-char (point-min))
+              (forward-line (1- end-line)) ;; Move to beginning of end-line
+              (let ((end-point (point)))
+                (message "[Emigo] Deleting region: %d-%d" start-point end-point)
+                ;; Delete the region
+                (delete-region start-point end-point)
+                ;; Insert the replacement text at the start position
+                (goto-char start-point)
+                (message "[Emigo] Inserting %d chars" (length replace-text))
+                (insert replace-text)
+                ;; Ensure newline at end if not present
+                (unless (looking-back "\n" 1)
+                  (insert "\n"))
+                ;; Mark buffer as modified for saving
+                (set-buffer-modified-p t)
+                (setq modified t))))))
+      ;; Save the buffer if modified
+      (when modified
+        (message "[Emigo] Saving buffer...")
+        (save-buffer buffer)
+        ;; Inform Emacs about the change (e.g., revert other buffers visiting this file)
+        (emigo--file-written-externally abs-path)
+        (message "[Emigo] Save successful")
+        t))))
 
 (defun emigo--file-written-externally (abs-path)
   "Inform Emacs that the file at ABS-PATH was modified externally.
@@ -1032,14 +1011,6 @@ Handles potential errors and captures stdout/stderr."
     ;; Return the captured output (already done by progn)
     ))
 
-(defun emigo--read-file-content-sync (abs-path)
-  "Read and return the content of the file at ABS-PATH."
-  (unless (file-readable-p abs-path)
-    (error "File not readable: %s" abs-path))
-  (with-temp-buffer
-    (insert-file-contents abs-path)
-    (buffer-string)))
-
 (defun emigo--list-files-sync (abs-path recursive-p)
   "List files in ABS-PATH, optionally RECURSIVE-P. Returns a newline-separated string."
   (unless (file-directory-p abs-path)
@@ -1065,28 +1036,30 @@ CASE-SENSITIVE defaults to t. If nil, performs case-insensitive search.
 MAX-MATCHES limits the number of matches per file (requires GNU grep >= 2.5.1)."
   (unless (file-directory-p abs-path)
     (error "Not a directory: %s" abs-path))
-  ;; Use grep for searching. Requires grep command-line tool.
-  (let* ((default-directory abs-path)
-         (case-flag (if case-sensitive "" " -i")) ;; Add -i if case-sensitive is nil
-         (max-flag (if (and max-matches (> max-matches 0)) ;; Add -m if max-matches is positive
-                       (format " -m %d" max-matches)
-                     ""))
-         ;; Construct the grep command
-         (grep-command (format "grep%s%s -nH -R --exclude-dir={.git,.hg,.svn,node_modules,venv,.venv,dist,build} -e %s ."
-                               case-flag
-                               max-flag
-                               (shell-quote-argument pattern)))
+  (let* ((default-directory abs-path) ;; Set CWD for grep
+         (case-option (unless case-sensitive "-i")) ;; -i if case-sensitive is nil
+         (max-option (when (and max-matches (> max-matches 0)) (format "-m%d" max-matches))) ;; Format as -mN
+         ;; Build the argument list for call-process
+         ;; Pass exclude-dir multiple times
+         (grep-args (list "-nH" "-R"
+                          "--exclude-dir=.git" "--exclude-dir=.hg" "--exclude-dir=.svn"
+                          "--exclude-dir=node_modules" "--exclude-dir=venv" "--exclude-dir=.venv"
+                          "--exclude-dir=dist" "--exclude-dir=build"))
+         (grep-args (if case-option (cons case-option grep-args) grep-args))
+         (grep-args (if max-option (cons max-option grep-args) grep-args))
+         ;; Add the pattern and target directory (.)
+         (grep-args (append grep-args (list "-e" pattern ".")))
          (output-buffer (generate-new-buffer "*emigo-grep-output*"))
          (results ""))
-    (message "[Emigo] Running search command: %s" grep-command) ;; Log the command being run
+    (message "[Emigo] Running search command: grep %s" (mapconcat #'shell-quote-argument grep-args " ")) ;; Log the command being run
     (unwind-protect
         (progn
-          ;; call-process-shell-command returns exit status.
-          ;; Grep returns 1 if no lines selected, 0 if successful, >1 on error.
-          ;; We ignore exit status 1 as it just means no matches.
-          (let ((exit-code (call-process-shell-command grep-command nil output-buffer t)))
+          ;; Use call-process, passing args as a list
+          (let ((exit-code (apply #'call-process "grep" nil output-buffer t grep-args)))
+            ;; Grep returns 1 if no lines selected, 0 if successful, >1 on error.
+            ;; We ignore exit status 1 as it just means no matches.
             (unless (or (eq exit-code 0) (eq exit-code 1))
-              (error "grep command failed with exit code %s: %s" exit-code grep-command)))
+              (error "grep command failed with exit code %s: grep %s" exit-code (mapconcat #'shell-quote-argument grep-args " "))))
           (with-current-buffer output-buffer
             (setq results (string-trim (buffer-string)))))
       (when (buffer-live-p output-buffer)

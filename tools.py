@@ -38,7 +38,7 @@ from utils import get_emacs_func_result, eval_in_emacs, read_file_content
 # Import system prompt constants for standard messages/prefixes
 from system_prompt import (
     TOOL_RESULT_SUCCESS, TOOL_RESULT_OUTPUT_PREFIX,
-    TOOL_DENIED, TOOL_ERROR_PREFIX, TOOL_ERROR_SUFFIX
+    TOOL_REPLACE_IN_FILE, TOOL_DENIED, TOOL_ERROR_PREFIX, TOOL_ERROR_SUFFIX
 )
 
 # --- Helper Functions ---
@@ -86,30 +86,9 @@ def read_file(session: Session, params: Dict[str, str]) -> str:
     abs_path = _resolve_path(session.session_path, rel_path)
     posix_rel_path = _posix_path(rel_path)
 
-    # --- Fuzzy Matching Pre-check ---
-    # similarity_threshold = 0.85 # Configurable threshold
-    # context_lines = 3 # For error reporting
-
     try:
         if not os.path.isfile(abs_path):
              return _format_tool_error(f"File not found: {posix_rel_path}")
-
-        # Get current file content from cache for fuzzy matching
-        file_content = session.get_cached_content(rel_path)
-        if file_content is None:
-            # Attempt to read if not cached (should ideally be cached by read_file or add_file)
-            print(f"Warning: File content for '{rel_path}' not in cache during replace. Attempting read.", file=sys.stderr)
-            try:
-                file_content = read_file_content(abs_path)
-                if file_content is None: # Check if read_file_content itself failed
-                     raise IOError("Failed to read file content.")
-                # Update cache if read was successful
-                session._update_file_cache(rel_path, content=file_content)
-            except Exception as read_err:
-                 return _format_tool_error(f"Error reading file content for replacement pre-check: {read_err}")
-
-        if file_content.startswith("# Error"): # Check if cached content is an error message
-            return _format_tool_error(f"Cannot perform replacement. Previous error reading/caching file: {posix_rel_path}. Please use read_file again.")
 
         # Add file to context list (Session class handles duplicates)
         added, add_msg = session.add_file_to_context(abs_path) # Use abs_path here
@@ -165,29 +144,44 @@ def write_to_file(session: Session, params: Dict[str, str]) -> str:
         return _format_tool_error(f"Error writing file: {e}")
 
 def _parse_search_replace_blocks(diff_str: str) -> Tuple[List[Tuple[str, str]], Optional[str]]:
-    """Parses *all* SEARCH/REPLACE blocks from a diff string."""
-    # Simplified regex assuming standard block format
+    """Parses *all* SEARCH/REPLACE blocks from a diff string.
+
+    Args:
+        diff_str: The string containing one or more SEARCH/REPLACE blocks.
+
+    Returns:
+        A tuple containing:
+        - A list of (search_text, replace_text) tuples for each valid block found.
+        - An error message string if parsing fails, otherwise None.
+    """
     search_marker = "<<<<<<< SEARCH\n"
     divider_marker = "\n=======\n"
     replace_marker = "\n>>>>>>> REPLACE"
     blocks = []
-    # Regex to find blocks non-greedily
+    # Use regex to find all blocks non-greedily
     pattern = re.compile(
-        re.escape(search_marker) + '(.*?)' + re.escape(divider_marker) +
-        '(.*?)' + re.escape(replace_marker), re.DOTALL
+        re.escape(search_marker) +
+        '(.*?)' + # Capture search text (non-greedy)
+        re.escape(divider_marker) +
+        '(.*?)' + # Capture replace text (non-greedy)
+        re.escape(replace_marker),
+        re.DOTALL # Allow '.' to match newlines
     )
+
     found_blocks = pattern.findall(diff_str)
 
     if not found_blocks:
-        # Check for common mistakes like markdown code blocks
+        # Check for common markdown fence if no blocks found
         if "```" in diff_str and search_marker not in diff_str:
              return [], "Diff content seems to be a markdown code block, not a SEARCH/REPLACE block."
         return [], "No valid SEARCH/REPLACE blocks found in the provided diff."
 
     for search_text, replace_text in found_blocks:
-        # Basic validation: ensure markers are not nested within text itself
+        # Basic validation: ensure markers are not nested within text itself in unexpected ways
         if search_marker in search_text or divider_marker in search_text or replace_marker in search_text or \
            search_marker in replace_text or divider_marker in replace_text or replace_marker in replace_text:
+            # This is a simplistic check; complex nesting could still fool it.
+            # Consider more robust parsing if needed.
             return [], "Detected malformed or nested SEARCH/REPLACE markers within a block's content."
         blocks.append((search_text, replace_text))
 
@@ -198,121 +192,157 @@ def replace_in_file(session: Session, params: Dict[str, str]) -> str:
     """Replaces content in a file using SEARCH/REPLACE blocks via Emacs."""
     rel_path = params.get("path")
     diff_str = params.get("diff")
+    similarity_threshold = 0.85 # Configurable threshold (85%)
 
     if not rel_path:
-        return _format_tool_error("Missing required parameter 'path'")
+        return _format_tool_error(f"Missing required parameter 'path' for {TOOL_REPLACE_IN_FILE}")
     if not diff_str:
-        return _format_tool_error("Missing required parameter 'diff' (SEARCH/REPLACE block)")
+        return _format_tool_error(f"Missing required parameter 'diff' (SEARCH/REPLACE block) for {TOOL_REPLACE_IN_FILE}")
 
-    abs_path = _resolve_path(session.session_path, rel_path)
-    posix_rel_path = _posix_path(rel_path)
-
-    # --- Fuzzy Matching Pre-check ---
-    similarity_threshold = 0.85 # Configurable threshold
-    context_lines = 3 # For error reporting
+    abs_path = os.path.abspath(os.path.join(session.session_path, rel_path))
+    posix_rel_path = rel_path.replace(os.sep, '/')
 
     try:
         if not os.path.isfile(abs_path):
-            return _format_tool_error(f"File not found: {posix_rel_path}. Please ensure it's added to the chat first.")
+            return _format_tool_error(f"File not found: {rel_path}. Please ensure it's added to the chat first.")
 
-        # Get current file content from cache for fuzzy matching
+        # --- Get File Content ---
+        # Use the session's method to get cached content (updates if stale)
         file_content = session.get_cached_content(rel_path)
         if file_content is None:
-            # Attempt to read if not cached (should ideally be cached by read_file or add_file)
-            print(f"Warning: File content for '{rel_path}' not in cache during replace. Attempting read.", file=sys.stderr)
-            try:
-                file_content = read_file_content(abs_path)
-                if file_content is None: # Check if read_file_content itself failed
-                     raise IOError("Failed to read file content.")
-                # Update cache if read was successful
-                session._update_file_cache(rel_path, content=file_content)
-            except Exception as read_err:
-                 return _format_tool_error(f"Error reading file content for replacement pre-check: {read_err}")
+            # If get_cached_content returns None, it means the file likely doesn't exist
+            # or couldn't be read/cached previously.
+            return _format_tool_error(f"Could not get content for file: {posix_rel_path}. It might not exist or be readable.")
 
+        # Note: session.get_cached_content already handles reading if necessary.
+        # The check below is redundant if get_cached_content works correctly,
+        # but we keep it as a safeguard against potential error strings stored in cache.
         if file_content.startswith("# Error"): # Check if cached content is an error message
-            return _format_tool_error(f"Cannot perform replacement. Previous error reading/caching file: {posix_rel_path}. Please use read_file again.")
+             return _format_tool_error(f"Cannot perform replacement. Cached content indicates a previous error for: {posix_rel_path}. Please use read_file again.")
 
-        # Parse *all* diff blocks from the input string
+        # --- Parse *All* Diff Blocks ---
         parsed_blocks, parse_error = _parse_search_replace_blocks(diff_str)
         if parse_error:
             return _format_tool_error(parse_error)
         if not parsed_blocks:
-            # If parsing failed but there was input, return specific error
             return _format_tool_error("No valid SEARCH/REPLACE blocks found in the diff.")
 
-        # Perform fuzzy matching check for each block
-        fuzzy_errors = []
+        # --- Fuzzy Match Each Block Against Original Content ---
         file_lines = file_content.splitlines(keepends=True) # Keep endings for context snippets
+        replacements_to_apply = [] # List of (start_line, elisp_end_line, replace_text)
+        errors = []
+        context_lines = 3 # For error reporting
 
-        for i, (search_text, _) in enumerate(parsed_blocks):
+        for i, (search_text, replace_text) in enumerate(parsed_blocks):
             if not search_text: # Cannot match empty string
-                fuzzy_errors.append(f"Block {i+1}: SEARCH block is empty.")
+                errors.append(f"Block {i+1}: SEARCH block is empty.")
                 continue # Skip this block
 
-            # Use SequenceMatcher for fuzzy comparison
+            # Match directly against the full file content string
             matcher = difflib.SequenceMatcher(None, file_content, search_text, autojunk=False)
-            # Find the best matching block
             match = matcher.find_longest_match(0, len(file_content), 0, len(search_text))
-            # Use ratio() which considers the whole strings for similarity
-            match_ratio = matcher.ratio()
 
-            print(f"Block {i+1} Fuzzy Check for '{posix_rel_path}': Ratio: {match_ratio:.2f}", file=sys.stderr)
+            # Calculate similarity ratio based on the text match
+            # Use match.size and len(search_text) for a direct ratio of the longest common subsequence
+            match_ratio = 0.0
+            if len(search_text) > 0: # Avoid division by zero
+                # Ratio calculation based on the longest contiguous matching block found
+                match_ratio = match.size / len(search_text)
+                # Alternative: matcher.ratio() considers the whole strings including non-matching parts
+                # match_ratio = matcher.ratio()
+                # Let's stick with match.size / len(search_text) as it focuses on the quality of the best block found
+
+            print(f"Block {i+1} Fuzzy match for '{rel_path}': Ratio: {match_ratio:.2f} (Chars: {match.size}/{len(search_text)}) at char index {match.a}", file=sys.stderr)
 
             if match_ratio < similarity_threshold:
                 # Provide context around the best (but failed) match character index
                 error_char_index = match.a
                 error_line_num = file_content.count('\n', 0, error_char_index) + 1
-                start_ctx_line_idx = max(0, error_line_num - 1 - context_lines)
-                end_ctx_line_idx = min(len(file_lines), error_line_num + context_lines)
-                context_snippet = "".join(file_lines[start_ctx_line_idx:end_ctx_line_idx])
-                fuzzy_errors.append(
-                    f"Block {i+1}: SEARCH text does not match current file content well enough "
-                    f"(similarity {match_ratio:.2f} < threshold {similarity_threshold:.2f}). "
-                    f"The file '{posix_rel_path}' may have changed.\n"
-                    f"Context near best match (line ~{error_line_num}):\n"
-                    f"```\n{context_snippet}\n```"
+                errors.append(
+                    f"Block {i+1}: Could not find a sufficiently similar block (ratio {match_ratio:.2f} < {similarity_threshold:.2f}) "
+                    f"for the SEARCH text in '{posix_rel_path}'.\n"
+                    f"Closest match near line {error_line_num} (char index {error_char_index}):\n"
+                    f"```\n{search_text}\nreplacing with\n{replace_text}```"
                 )
+            else:
+                # Match Found - Calculate line numbers from character indices
+                start_char_index = match.a
+                end_char_index = match.a + match.size # Index after the last matched character
 
-        if fuzzy_errors:
-            error_header = f"Failed fuzzy matching pre-check for '{posix_rel_path}':\n"
-            error_details = "\n\n".join(fuzzy_errors)
+                # Calculate 1-based start line
+                start_line = file_content.count('\n', 0, start_char_index) + 1
+
+                # Calculate 1-based line number containing the *last* character of the match
+                # Need to handle edge case where match.size is 0 (shouldn't happen if ratio > 0)
+                # or where the match ends exactly at the end of the file without a newline.
+                last_char_index = end_char_index - 1
+                if last_char_index < start_char_index: # Handle empty match case if it slips through
+                     end_line_containing_last_char = start_line
+                else:
+                     end_line_containing_last_char = file_content.count('\n', 0, last_char_index) + 1
+
+                # Elisp's delete-region uses an *exclusive* end point.
+                # To delete lines inclusively from start_line to end_line_containing_last_char,
+                # we need to provide Elisp with the line number *after* the last line to delete.
+                elisp_end_line = end_line_containing_last_char + 1
+
+                replacements_to_apply.append((start_line, elisp_end_line, replace_text))
+                # The print statement shows the *inclusive* line range being replaced for clarity
+                print(f"Block {i+1}: Match found >= threshold. Staging replacement for lines {start_line}-{elisp_end_line-1} (Elisp end: {elisp_end_line})")
+
+        # --- Handle Errors or Proceed ---
+        if errors:
+            error_header = f"Failed to apply replacements to '{posix_rel_path}' due to {len(errors)} error(s):\n{replace_text}"
+            error_details = "\n\n".join(errors)
+            # Suggest reading the file again
             error_footer = "\nPlease use read_file to get the exact current content and try again with updated SEARCH blocks."
             return _format_tool_error(error_header + error_details + error_footer)
-        # --- End Fuzzy Matching Pre-check ---
 
-        # Call Elisp function `emigo--replace-regions-sync` to perform replacements
+        if not replacements_to_apply:
+             return _format_tool_error("No replacements could be applied (all blocks failed matching or were empty).")
+
+
+        # --- Call Elisp to Perform Multiple Replacements ---
         try:
-            # Convert Python list of tuples [search, replace] to JSON array string
-            replacements_json = json.dumps(parsed_blocks)
-            print(f"Requesting {len(parsed_blocks)} replacements in '{posix_rel_path}' via Elisp.", file=sys.stderr)
+            # Serialize the list of replacements to JSON for Elisp
+            # Convert Python list to JSON array string that Elisp can parse
+            replacements_json = json.dumps(replacements_to_apply)
+            print(f"Requesting {len(replacements_to_apply)} replacements in '{posix_rel_path}' via Elisp.", file=sys.stderr)
 
-            # Synchronous call to Emacs
             result = get_emacs_func_result("replace-regions-sync", abs_path, replacements_json)
 
-            # Process the result from Emacs
+            # --- Process Elisp Result ---
             if result is True or str(result).lower() == 't': # Check for elisp t
-                print(f"Elisp successfully applied replacements to '{rel_path}'.", file=sys.stderr)
-                # Update session cache after successful replacement
-                session._update_file_cache(rel_path) # Reads the modified content
-                return _format_tool_result(f"File '{posix_rel_path}' modified successfully by applying {len(parsed_blocks)} block(s).")
+                print(f"Elisp successfully applied {len(replacements_to_apply)} replacements to '{rel_path}'.", file=sys.stderr)
+                # Success: Re-read content from Emacs and update session cache
+                try:
+                    updated_content = read_file_content(abs_path)
+                    # Use session's method to update cache with new content
+                    session._update_file_cache(rel_path, content=updated_content)
+                    print(f"Updated session cache for '{rel_path}' after successful replacement.", file=sys.stderr)
+                except Exception as read_err:
+                    print(f"Warning: Failed to re-read file '{rel_path}' after replacement to update cache: {read_err}", file=sys.stderr)
+                    # Invalidate cache entry on read error using session method
+                    session.invalidate_cache(rel_path)
+                    # Return success, but mention the cache issue
+                    return _format_tool_result(f"{TOOL_RESULT_SUCCESS}\nFile '{posix_rel_path}' modified successfully by applying {len(replacements_to_apply)} block(s).\n(Warning: Could not update session cache after modification.)")
+
+                return _format_tool_result(f"{TOOL_RESULT_SUCCESS}\nFile '{posix_rel_path}' modified successfully by applying {len(replacements_to_apply)} block(s).")
             else:
-                # Elisp returned an error string or nil
+                # Elisp returned an error
                 error_detail = str(result) if result else "Unknown error during multi-replacement in Emacs."
                 print(f"Error applying multi-replacement via Elisp to '{rel_path}': {error_detail}", file=sys.stderr)
-                session.invalidate_cache(rel_path) # Invalidate cache on error
                 return _format_tool_error(
                     f"Error applying replacements in Emacs: {error_detail}\n\n"
                     f"File: {posix_rel_path}\n"
-                    f"Please check the Emacs *Messages* buffer or file content."
+                    f"Please check the Emacs *Messages* buffer for details."
                 )
         except Exception as elisp_call_err:
-            print(f"Error calling Elisp function 'replace-regions-sync' for '{rel_path}': {elisp_call_err}\n{traceback.format_exc()}", file=sys.stderr)
-            session.invalidate_cache(rel_path) # Invalidate cache on error
-            return _format_tool_error(f"Error communicating with Emacs for replacement: {elisp_call_err}")
+             print(f"Error calling Elisp function 'replace-regions-sync' for '{rel_path}': {elisp_call_err}\n{traceback.format_exc()}", file=sys.stderr)
+             return _format_tool_error(f"Error communicating with Emacs for replacement: {elisp_call_err}")
 
     except Exception as e:
         print(f"Error during replace_in_file for '{rel_path}': {e}\n{traceback.format_exc()}", file=sys.stderr)
-        session.invalidate_cache(rel_path) # Invalidate cache on error
         return _format_tool_error(f"Error processing replacement for {posix_rel_path}: {e}")
 
 

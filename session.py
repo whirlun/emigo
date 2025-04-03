@@ -185,8 +185,7 @@ class Session:
             # Update cache
             self.caches['mtimes'][rel_path] = current_mtime
             self.caches['contents'][rel_path] = content
-            if self.verbose:
-                print(f"Updated cache for {rel_path}", file=sys.stderr)
+
             return True
 
         except Exception as e:
