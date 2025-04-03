@@ -252,8 +252,6 @@ class Session:
                 self.history.append((time.time(), dict(msg_dict)))
             else:
                 print(f"Warning: Skipping invalid message dict during set_history: {msg_dict}", file=sys.stderr)
-        if self.verbose:
-            print(f"Session history replaced with {len(self.history)} messages.", file=sys.stderr)
 
 
 # Example usage (for testing if run directly)

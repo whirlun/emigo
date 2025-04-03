@@ -9,7 +9,7 @@
 ;; Copyright (C) 2025, Emigo, all rights reserved.
 ;; Created: 2025-03-29
 ;; Version: 0.5
-;; Last-Updated: Wed Apr  2 21:06:45 2025 (-0400)
+;; Last-Updated: Thu Apr  3 01:30:31 2025 (-0400)
 ;;           By: Mingde (Matthew) Zeng
 ;; Package-Requires: ((emacs "26.1") (transient "0.3.0") (compat "30.0.2.0"))
 ;; Keywords: ai emacs llm aider ai-pair-programming tools
@@ -82,6 +82,7 @@
              (emigo-epc-define-method mngr 'execute-command-sync 'emigo--execute-command-sync)
              (emigo-epc-define-method mngr 'read-file-content-sync 'emigo--read-file-content-sync)
              (emigo-epc-define-method mngr 'list-files-sync 'emigo--list-files-sync)
+             (emigo-epc-define-method mngr 'search-files-sync 'emigo--search-files-sync)
              (emigo-epc-define-method mngr 'flush-buffer 'emigo-flush-buffer)
              (emigo-epc-define-method mngr 'yes-or-no-p 'yes-or-no-p)
              (emigo-epc-define-method mngr 'get_history 'emigo--get-llm-history))))
@@ -541,8 +542,51 @@ Otherwise return nil."
     (define-key map (kbd "C-c C-h") #'emigo-show-history)
     (define-key map (kbd "C-c C-k") #'emigo-cancel-interaction)
     (define-key map (kbd "S-<return>") #'emigo-send-newline)
+    (define-key map (kbd "M-p") #'emigo-previous-prompt)
+    (define-key map (kbd "M-n") #'emigo-next-prompt)
     map)
   "Keymap used by `emigo-mode'.")
+
+(defvar-local emigo--prompt-history '("")
+  "History of previous prompts in Emigo sessions.")
+
+(defvar emigo-prompt-history-index 0
+  "Current index in the prompt history.")
+
+(defun emigo--cycle-prompt-history (direction)
+  "Cycle through prompt history in DIRECTION (1 for older, -1 for newer).
+Index 0 always corresponds to an empty prompt string."
+  (when (> (length emigo--prompt-history) 1) ;; Only cycle if there's more than just ""
+    (let ((hist-len (length emigo--prompt-history)))
+      (setq emigo-prompt-history-index (+ emigo-prompt-history-index direction))
+      ;; Wrap around logic
+      (cond
+       ((>= emigo-prompt-history-index hist-len) ;; Went past oldest, wrap to empty ""
+        (setq emigo-prompt-history-index 0))
+       ((< emigo-prompt-history-index 0) ;; Went past newest, wrap to oldest
+        (setq emigo-prompt-history-index (1- hist-len))))
+
+      ;; Go to the end, find the start of the current prompt text, delete it, and insert history
+      (goto-char (point-max))
+      (when (search-backward-regexp (concat "^" (regexp-quote emigo-prompt-string)) nil t)
+        (progn ;; Ensure both actions happen only if search succeeds
+          (forward-char (length emigo-prompt-string))
+          (delete-region (point) (point-max))))
+      (insert (nth emigo-prompt-history-index emigo--prompt-history)))))
+
+(defun emigo-previous-prompt ()
+  "Navigate to previous prompt in history."
+  (interactive)
+  (let ((inhibit-read-only t))
+    ;; Cycle towards older prompts (higher index in newest-first list)
+    (emigo--cycle-prompt-history 1)))
+
+(defun emigo-next-prompt ()
+  "Navigate to next prompt in history."
+  (interactive)
+  (let ((inhibit-read-only t))
+    ;; Cycle towards newer prompts (lower index in newest-first list)
+    (emigo--cycle-prompt-history -1)))
 
 (define-derived-mode emigo-mode fundamental-mode "emigo"
   "Major mode for Emigo AI chat sessions.
@@ -551,6 +595,8 @@ Otherwise return nil."
   (setq major-mode 'emigo-mode)
   (setq mode-name "emigo")
   (use-local-map emigo-mode-map)
+  (setq-local emigo--prompt-history '(""))
+  (setq-local emigo-prompt-history-index 0)
   (run-hooks 'emigo-mode-hook))
 
 (defun emigo-send-newline ()
@@ -581,9 +627,15 @@ Otherwise return nil."
                   )))
     (if (string-empty-p prompt)
         (message "Please type prompt to send.")
-      (search-backward-regexp (concat "^" emigo-prompt-string) nil t)
-      (forward-char (length emigo-prompt-string))
-      (delete-region (point) (point-max))
+      ;; Add prompt after the initial "" (at index 1)
+      (setcdr emigo--prompt-history (cons prompt (cdr emigo--prompt-history)))
+      ;; Reset index to 0 (pointing to the empty string)
+      (setq emigo-prompt-history-index 0)
+      ;; Send prompt
+      (goto-char (point-max)) ;; Go to end before searching back
+      (when (search-backward-regexp (concat "^" (regexp-quote emigo-prompt-string)) nil t)
+        (forward-char (length emigo-prompt-string))
+        (delete-region (point) (point-max)))
       (emigo-call-async "emigo_send" emigo-session-path prompt))))
 
 (defun emigo--flush-buffer (session-path content &optional role)
@@ -932,6 +984,42 @@ Handles potential errors and captures stdout/stderr."
     ;; Let Python handle making them relative if needed. Return full paths for now.
     (mapconcat #'identity files "\n")))
 
+(defun emigo--search-files-sync (abs-path pattern &optional case-sensitive max-matches)
+  "Search for PATTERN within files in ABS-PATH using grep.
+Returns results in a format similar to grep output (file:line:match).
+CASE-SENSITIVE defaults to t. If nil, performs case-insensitive search.
+MAX-MATCHES limits the number of matches per file (requires GNU grep >= 2.5.1)."
+  (unless (file-directory-p abs-path)
+    (error "Not a directory: %s" abs-path))
+  ;; Use grep for searching. Requires grep command-line tool.
+  (let* ((default-directory abs-path)
+         (case-flag (if case-sensitive "" " -i")) ;; Add -i if case-sensitive is nil
+         (max-flag (if (and max-matches (> max-matches 0)) ;; Add -m if max-matches is positive
+                       (format " -m %d" max-matches)
+                     ""))
+         ;; Construct the grep command
+         (grep-command (format "grep%s%s -nH -R --exclude-dir={.git,.hg,.svn,node_modules,venv,.venv,dist,build} -e %s ."
+                               case-flag
+                               max-flag
+                               (shell-quote-argument pattern)))
+         (output-buffer (generate-new-buffer "*emigo-grep-output*"))
+         (results ""))
+    (message "[Emigo] Running search command: %s" grep-command) ;; Log the command being run
+    (unwind-protect
+        (progn
+          ;; call-process-shell-command returns exit status.
+          ;; Grep returns 1 if no lines selected, 0 if successful, >1 on error.
+          ;; We ignore exit status 1 as it just means no matches.
+          (let ((exit-code (call-process-shell-command grep-command nil output-buffer t)))
+            (unless (or (eq exit-code 0) (eq exit-code 1))
+              (error "grep command failed with exit code %s: %s" exit-code grep-command)))
+          (with-current-buffer output-buffer
+            (setq results (string-trim (buffer-string)))))
+      (when (buffer-live-p output-buffer)
+        (kill-buffer output-buffer)))
+    ;; Return the raw grep output string (empty if no matches)
+    results))
+
 (defun emigo--get-llm-history (session-path)
   "Wrapper function called by Python EPC to get LLM history.
 This function is needed for EPC registration but the actual logic
@@ -944,22 +1032,28 @@ is handled by `emigo-call--sync \"get_history\" session-path`."
   nil)
 
 (defun emigo--clear-local-buffer (session-path)
-  "Clear the local Emacs buffer content and history for SESSION-PATH."
+  "Clear the local Emacs buffer content and history for SESSION-PATH.
+Preserves the prompt history for convenience."
   (let ((buffer (get-buffer (emigo-get-buffer-name t session-path))))
     (when buffer
       (with-current-buffer buffer
-        ;; Clear local buffer output accumulator
-        (setq-local emigo--llm-output "")
-        ;; History is managed on the Python side, no local history to clear
-        ;; Erase buffer content and reset prompt
-        (let ((inhibit-read-only t))
-          (erase-buffer)
-          (insert (propertize (concat "\n\n" emigo-prompt-string) 'face font-lock-keyword-face))
-          (goto-char (point-max)))
-        (message "Local buffer cleared for session: %s" session-path)))))
+        ;; Save current prompt history before clearing
+        (let ((saved-prompt-history emigo--prompt-history))
+          ;; Clear local buffer output accumulator
+          (setq-local emigo--llm-output "")
+          ;; History is managed on the Python side, no local history to clear
+          ;; Erase buffer content and reset prompt
+          (let ((inhibit-read-only t))
+            (erase-buffer)
+            (insert (propertize (concat "\n\n" emigo-prompt-string) 'face font-lock-keyword-face))
+            (goto-char (point-max)))
+          ;; Restore the prompt history after clearing
+          (setq-local emigo--prompt-history saved-prompt-history)
+          (message "Local buffer cleared for session: %s" session-path))))))
 
 (defun emigo-clear-history ()
-  "Clear the chat history (both remote LLM and local buffer) for the current Emigo session."
+  "Clear the chat history (both remote LLM and local buffer) for the current Emigo session.
+Preserves the prompt history for convenience."
   (interactive)
   (unless (emigo-epc-live-p emigo-epc-process)
     (message "[Emigo] Process not running.")
@@ -974,10 +1068,15 @@ is handled by `emigo-call--sync \"get_history\" session-path`."
       (unless emigo-session-path
         (error "[Emigo] Could not determine session path from buffer"))
 
-      ;; Call Python side to clear LLM history and trigger local buffer clear
-      (if (emigo-call--sync "clear_history" emigo-session-path)
-          (message "Cleared history for session: %s" (file-name-nondirectory emigo-session-path))
-        (message "Failed to clear history for session: %s" (file-name-nondirectory emigo-session-path))))))
+      ;; Save current prompt history before clearing
+      (let ((saved-prompt-history emigo--prompt-history))
+        ;; Call Python side to clear LLM history and trigger local buffer clear
+        (if (emigo-call--sync "clear_history" emigo-session-path)
+            (progn
+              ;; Restore the prompt history after clearing
+              (setq-local emigo--prompt-history saved-prompt-history)
+              (message "Cleared history for session: %s" (file-name-nondirectory emigo-session-path)))
+          (message "Failed to clear history for session: %s" (file-name-nondirectory emigo-session-path)))))))
 
 (defun emigo-show-history ()
   "Display the chat history for the current Emigo session in a new Org buffer."
