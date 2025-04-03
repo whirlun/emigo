@@ -253,7 +253,7 @@ def handle_interaction_request(request):
                     llm_tool_results = [res for res in tool_results if res != "COMPLETION_SIGNALLED"]
                     combined_tool_result = "\n\n".join(llm_tool_results)
                     # Add tool results to the local interaction history using the 'tool' role
-                    interaction_history.append({"role": "tool", "content": combined_tool_result})
+                    interaction_history.append({"role": "system", "content": combined_tool_result})
 
                 # 6. Check if loop should break
                 if not should_continue_interaction:
