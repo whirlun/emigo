@@ -29,7 +29,7 @@ from typing import Dict, List, Optional, Tuple
 
 from repomapper import RepoMapper
 from utils import (
-     eval_in_emacs, _filter_environment_details
+     eval_in_emacs, _filter_environment_details, read_file_content
  )
 
 class Session:
