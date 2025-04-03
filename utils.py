@@ -77,16 +77,11 @@ def close_epc_client():
         epc_client.close()
 
 
-def handle_arg_types(arg):
-    if type(arg) is str and arg.startswith("'"):
-        arg = sexpdata.Symbol(arg.partition("'")[2])
-
-    return sexpdata.Quoted(arg)
-
-
 def eval_in_emacs(method_name, *args):
-    args = [sexpdata.Symbol(method_name)] + list(map(handle_arg_types, args))    # type: ignore
-    sexp = sexpdata.dumps(args)
+    # Construct the list for the S-expression directly with Python types
+    sexp_list = [sexpdata.Symbol(method_name)] + list(args)
+    # Let sexpdata.dumps handle conversion and escaping of Python types (str, int, etc.)
+    sexp = sexpdata.dumps(sexp_list)
 
     logger.debug("Eval in Emacs: %s", sexp)
     # Call eval-in-emacs elisp function.
