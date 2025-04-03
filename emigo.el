@@ -9,7 +9,7 @@
 ;; Copyright (C) 2025, Emigo, all rights reserved.
 ;; Created: 2025-03-29
 ;; Version: 0.5
-;; Last-Updated: Wed Apr  2 16:48:23 2025 (-0400)
+;; Last-Updated: Wed Apr  2 21:06:45 2025 (-0400)
 ;;           By: Mingde (Matthew) Zeng
 ;; Package-Requires: ((emacs "26.1") (transient "0.3.0") (compat "30.0.2.0"))
 ;; Keywords: ai emacs llm aider ai-pair-programming tools
@@ -83,7 +83,7 @@
              (emigo-epc-define-method mngr 'read-file-content-sync 'emigo--read-file-content-sync)
              (emigo-epc-define-method mngr 'list-files-sync 'emigo--list-files-sync)
              (emigo-epc-define-method mngr 'flush-buffer 'emigo-flush-buffer)
-             ;; Register the new history retrieval function
+             (emigo-epc-define-method mngr 'yes-or-no-p 'yes-or-no-p)
              (emigo-epc-define-method mngr 'get_history 'emigo--get-llm-history))))
     (if emigo-server
         (setq emigo-server-port (process-contact emigo-server :service))
@@ -730,7 +730,7 @@ PARAMS-PLIST-STRING is expected to be a string representation of an elisp plist,
          (prompt-message
           (format "[Emigo Approval] Allow tool '%s' for session '%s'?\nParams:\n%s\nApprove? (y or n) "
                   tool-name
-                  (file-name-nondirectory session-path)
+                  session-path
                   (if param-alist
                       (mapconcat (lambda (pair) (format "- %S: %S" (car pair) (cdr pair))) param-alist "\n")
                     params-plist-string)))) ;; Show raw string if plist parsing failed
@@ -743,7 +743,7 @@ Returns the user's input string, or nil if cancelled/empty."
   (interactive) ;; For testing
   (let* ((options (ignore-errors (json-parse-string options-json-string)))
          (prompt (format "[Emigo Question] (%s)\n%s\n%sAnswer: "
-                         (file-name-nondirectory session-path)
+                         session-path
                          question
                          (if (and (listp options) (> (length options) 0))
                              (concat (mapconcat (lambda (opt) (format "- %s" opt)) options "\n") "\n")
@@ -777,7 +777,7 @@ Display RESULT-TEXT and optionally offer to run COMMAND-STRING."
             (insert (propertize "\n--- Completion Attempt ---\n" 'face 'font-lock-comment-face))
             (insert result-text)
             (insert (propertize "\n--- End Completion ---\n" 'face 'font-lock-comment-face)))))
-      (message "[Emigo] Task completed by agent for session: %s" (file-name-nondirectory session-path))
+      (message "[Emigo] Task completed by agent for session: %s" session-path)
       (when (and command-string (not (string-empty-p command-string)))
         (if (y-or-n-p (format "Run demonstration command? `%s`" command-string))
             (emigo--execute-command-sync session-path command-string))))))
@@ -879,7 +879,7 @@ If the file is visited in a buffer, offer to revert it."
 (defun emigo--agent-finished (session-path)
   "Callback function when the agent finishes its interaction for SESSION-PATH."
   ;; TODO: Maybe update a mode-line indicator?
-  (message "[Emigo] Agent finished for session: %s" (file-name-nondirectory session-path))
+  (message "[Emigo] Agent finished for session: %s" session-path)
   nil)
 
 (defun emigo--execute-command-sync (session-path command-string)
@@ -956,7 +956,7 @@ is handled by `emigo-call--sync \"get_history\" session-path`."
           (erase-buffer)
           (insert (propertize (concat "\n\n" emigo-prompt-string) 'face font-lock-keyword-face))
           (goto-char (point-max)))
-        (message "Local buffer cleared for session: %s" (file-name-nondirectory session-path))))))
+        (message "Local buffer cleared for session: %s" session-path)))))
 
 (defun emigo-clear-history ()
   "Clear the chat history (both remote LLM and local buffer) for the current Emigo session."

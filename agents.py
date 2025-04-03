@@ -233,42 +233,6 @@ class Agents:
             # self.llm_client.append_history({"role": "assistant", "content": error_message})
             return None # Indicate error
 
-    def _process_llm_response(self, full_response: str) -> Tuple[bool, List[Tuple[str, Dict[str, str]]]]:
-        """
-        Parses the LLM response for tool requests and determines if the interaction should end based on the response.
-
-        Returns:
-            Tuple (should_end: bool, tool_requests: List[Tuple[str, Dict]])
-            - should_end: True if interaction should end (e.g., no tool use, completion tool requested).
-            - tool_requests: The list of parsed tool requests (tool_name, params).
-        """
-        tool_requests = self._parse_tool_use(full_response)
-
-        if not tool_requests:
-            # No tool use found. Assume final answer or empty response. End interaction.
-            is_empty_or_whitespace = not full_response.strip()
-            if is_empty_or_whitespace:
-                print("Empty response received from LLM, ending interaction.", file=sys.stderr)
-            else:
-                print("No tool use found, assuming final response. Ending interaction.", file=sys.stderr)
-            return True, [] # Should end, no tools
-
-        # Check if the completion tool is requested
-        for tool_name, _ in tool_requests:
-            if tool_name == TOOL_ATTEMPT_COMPLETION:
-                print("Completion tool requested, ending interaction after execution.", file=sys.stderr)
-                # The loop should end *after* this tool is executed by the worker.
-                # We return the tool list so the worker executes it, but signal should_end=True.
-                return True, tool_requests
-
-        # Found tools, and none are the completion tool. Continue interaction.
-        return False, tool_requests
-
-
-    # Note: run_interaction is removed. The interaction loop now lives in llm_worker.py
-    # def run_interaction(self, initial_user_prompt: str): ...
-
-
     # --- History Truncation & Token Counting ---
 
     def _truncate_history(self, history: List[Dict[str, str]]) -> List[Dict[str, str]]:

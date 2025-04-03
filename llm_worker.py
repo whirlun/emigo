@@ -198,71 +198,79 @@ def handle_interaction_request(request):
                 interaction_history.append({"role": "assistant", "content": error_message})
                 break  # Exit loop on communication error
 
-            if full_response is None: # Check if LLM call failed
-                # Error message already streamed, just break
-                break
+            # Check if the LLM response was empty or only whitespace
+            if not full_response or not full_response.strip():
+                print("Worker: LLM response was empty or whitespace.", file=sys.stderr)
+                # Add the (empty) response to history before breaking
+                interaction_history.append({"role": "assistant", "content": full_response or ""})
+                # No tool use possible with empty response, break the loop
+                break # Exit loop, interaction ends here
+            else:
+                # Add assistant's non-empty response to the local interaction history
+                 interaction_history.append({"role": "assistant", "content": full_response})
 
-            # Add assistant's response to the local interaction history
-            interaction_history.append({"role": "assistant", "content": full_response})
-
-            # 3. Process Response (Parse Tools)
+            # 3. Process Response (Parse Tools) - Only if response was not empty
             tool_requests = agent._parse_tool_use(full_response) # Returns list of (tool_name, params)
 
-            if not tool_requests:
-                # No tool use found, assume final response
-                print("Worker: No tool use found, ending interaction", file=sys.stderr)
-                break # Exit the turn loop
+            # If no tool requests, the loop will continue. The assistant's previous response
+            # is already added to history. The next turn will proceed with that history.
+            # print("Worker: No tool use found in this turn.", file=sys.stderr) # Optional debug
 
             # 4. Execute Tools (if any)
             tool_results = []
-            should_continue_interaction = True
-            for tool_name, params in tool_requests:
-                # Special handling for completion tool
-                if tool_name == "attempt_completion":
-                    result_text = params.get("result", "")
-                    command = params.get("command", "")
-                    # Send completion message to main process (which signals Emacs)
-                    # The main process handles the "COMPLETION_SIGNALLED" logic now.
-                    # We just need to request the tool execution.
-                    print(f"Worker: Requesting execution for completion tool", file=sys.stderr)
+            # Only execute if tool_requests is not empty
+            if tool_requests:
+                should_continue_interaction = True
+                for tool_name, params in tool_requests:
+                    # Special handling for completion tool
+                    if tool_name == "attempt_completion":
+                        result_text = params.get("result", "")
+                        command = params.get("command", "")
+                        # Send completion message to main process (which signals Emacs)
+                        # The main process handles the "COMPLETION_SIGNALLED" logic now.
+                        # We just need to request the tool execution.
+                        print(f"Worker: Requesting execution for completion tool", file=sys.stderr)
+                        tool_result = request_tool_execution(session_path, tool_name, params)
+                        tool_results.append(tool_result) # Append the result (e.g., "COMPLETION_SIGNALLED")
+                        should_continue_interaction = False # End interaction after this tool
+                        break # Stop processing further tools in this turn
+
+                    # Execute other tools via main process communication
+                    print(f"Worker: Requesting execution for tool: {tool_name}", file=sys.stderr)
                     tool_result = request_tool_execution(session_path, tool_name, params)
-                    tool_results.append(tool_result) # Append the result (e.g., "COMPLETION_SIGNALLED")
-                    should_continue_interaction = False # End interaction after this tool
-                    break # Stop processing further tools in this turn
+                    tool_results.append(tool_result)
 
-                # Execute other tools via main process communication
-                print(f"Worker: Requesting execution for tool: {tool_name}", file=sys.stderr)
-                tool_result = request_tool_execution(session_path, tool_name, params)
-                tool_results.append(tool_result)
+                    # Check for denial or error that should stop the interaction
+                    # The main process formats these standard strings.
+                    if tool_result == "TOOL_DENIED" or tool_result.startswith("<tool_error>"):
+                        print(f"Worker: Tool denied or failed, ending interaction. Result: {tool_result}", file=sys.stderr)
+                        should_continue_interaction = False
+                        break # Stop processing further tools in this turn
 
-                # Check for denial or error that should stop the interaction
-                # The main process formats these standard strings.
-                if tool_result == "TOOL_DENIED" or tool_result.startswith("<tool_error>"):
-                    print(f"Worker: Tool denied or failed, ending interaction. Result: {tool_result}", file=sys.stderr)
-                    should_continue_interaction = False
-                    break # Stop processing further tools in this turn
-
-            # 5. Add Tool Results to History
-            if tool_results:
-                # Filter out the special completion marker if present
-                llm_tool_results = [res for res in tool_results if res != "COMPLETION_SIGNALLED"]
-                if llm_tool_results:
+                # 5. Add Tool Results to History (only if tools were executed)
+                if tool_results:
+                    # Filter out the special completion marker if present
+                    llm_tool_results = [res for res in tool_results if res != "COMPLETION_SIGNALLED"]
                     combined_tool_result = "\n\n".join(llm_tool_results)
                     # Add tool results to the local interaction history
                     # Tool results act like user input for the next LLM turn
                     interaction_history.append({"role": "user", "content": combined_tool_result})
 
-            # 6. Check if loop should break
-            if not should_continue_interaction:
-                print("Worker: Ending interaction due to completion, denial, or error.", file=sys.stderr)
+                # 6. Check if loop should break
+                if not should_continue_interaction:
+                    print("Worker: Ending interaction due to completion, denial, or error.", file=sys.stderr)
+                    break # Exit the turn loop
+                # If we executed tools successfully and should continue, proceed to fetch env details
+                else:
+                     # 7. Fetch updated environment details ONLY if continuing to the next turn
+                    print("Worker: Requesting updated environment details for next turn...", file=sys.stderr)
+                    updated_env_details = request_environment_details(session_path)
+                    agent.environment_details_str = updated_env_details # Update agent's state for _prepare_llm_prompt
+                    print("Worker: Updated environment details received.", file=sys.stderr)
+            else:
+                # No tools were requested in this turn, interaction ends here.
+                print("Worker: No tool use found, ending interaction.", file=sys.stderr)
                 break # Exit the turn loop
-
-            # 7. Fetch updated environment details for the *next* turn
-            print("Worker: Requesting updated environment details...", file=sys.stderr)
-            updated_env_details = request_environment_details(session_path)
-            agent.environment_details_str = updated_env_details # Update agent's state for _prepare_llm_prompt
-            # Also update the environment details in the request dict in case it's needed elsewhere? No, agent uses its internal copy.
-            print("Worker: Updated environment details received.", file=sys.stderr)
 
 
         # --- End of Turn Loop ---

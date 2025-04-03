@@ -202,13 +202,6 @@ class Emigo:
             python_executable = sys.executable # Use the same python interpreter
             worker_script_path = os.path.abspath(worker_script)
 
-            print(f"_start_llm_worker: Checking if worker script exists: {worker_script_path}", file=sys.stderr, flush=True) # DEBUG + flush
-            if not os.path.exists(worker_script_path):
-                print(f"_start_llm_worker: ERROR - Worker script not found at {worker_script_path}", file=sys.stderr, flush=True) # DEBUG + flush
-                message_emacs(f"Error: LLM worker script not found: {worker_script_path}")
-                self.llm_worker_process = None
-                return # Exit the function
-
             try:
                 print(f"_start_llm_worker: Starting LLM worker process: {python_executable} {worker_script_path}", file=sys.stderr, flush=True) # DEBUG + flush
                 self.llm_worker_process = subprocess.Popen(
@@ -300,14 +293,14 @@ class Emigo:
                 self.llm_worker_process = None # Ensure process is marked as None
                 print("LLM worker process stopped.", file=sys.stderr)
 
-            # Wait for reader threads to finish (using join with timeout)
-            # if self.llm_worker_reader_thread and self.llm_worker_reader_thread.is_alive():
-            #     self.llm_worker_reader_thread.join(timeout=1)
-            # if self.llm_worker_stderr_thread and self.llm_worker_stderr_thread.is_alive():
-            #     self.llm_worker_stderr_thread.join(timeout=1)
-            # self.llm_worker_reader_thread = None
-            # self.llm_worker_stderr_thread = None
-            # Let daemon threads exit automatically
+            # Signal and wait for the queue processor thread to finish
+            if hasattr(self, 'worker_processor_thread') and self.worker_processor_thread and self.worker_processor_thread.is_alive():
+                print("Signaling worker queue processor thread to stop...", file=sys.stderr)
+                self.worker_output_queue.put(None) # Signal loop to exit
+                self.worker_processor_thread.join(timeout=2) # Wait for it
+                if self.worker_processor_thread.is_alive():
+                    print("Warning: Worker queue processor thread did not exit cleanly.", file=sys.stderr)
+            self.worker_processor_thread = None # Mark as stopped
 
     def _read_worker_stdout(self):
         """Reads stdout lines from the worker and puts them in a queue."""
@@ -491,7 +484,6 @@ class Emigo:
         require_approval_list = [
             TOOL_EXECUTE_COMMAND,
             TOOL_WRITE_TO_FILE,
-            TOOL_REPLACE_IN_FILE,
         ]
 
         # --- Request Approval from Emacs (Synchronous) ---
@@ -585,21 +577,32 @@ class Emigo:
         """EPC: Handles a user prompt by initiating an interaction with the LLM worker."""
         print(f"Received prompt for session: {session_path}: {prompt}", file=sys.stderr)
 
-        # Ensure session_path is valid directory
-        try:
-            if not os.path.isdir(session_path):
-                raise ValueError("Session path is not a valid directory")
-        except Exception as e:
-            print(f"ERROR: Invalid session path provided: {session_path} - {e}", file=sys.stderr)
-            eval_in_emacs("emigo--flush-buffer", f"invalid-session-{session_path}", f"[Error: Invalid session path '{session_path}']", "error")
-            return
-
         # Check if another interaction is already running
         if self.active_interaction_session:
-            print(f"Interaction already active for session {self.active_interaction_session}. Ignoring new prompt for {session_path}.", file=sys.stderr)
-            eval_in_emacs("emigo--flush-buffer", session_path, "[Agent busy, please wait for the current interaction to finish or cancel it.]", "warning")
-            return
-        self.active_interaction_session = session_path # Mark this session as active
+            print(f"Interaction already active for session {self.active_interaction_session}. Asking user about new prompt for {session_path}.", file=sys.stderr)
+            try:
+                # Ask user in Emacs if they want to cancel the active session and proceed
+                confirm_cancel = get_emacs_func_result("yes-or-no-p",
+                                                       "Agent is currently running, do you want to stop it and re-run with your new prompt?")
+
+                if confirm_cancel:
+                    print(f"User confirmed cancellation of {self.active_interaction_session}. Proceeding with {session_path}.", file=sys.stderr)
+                    # Cancel the currently active interaction. This also resets self.active_interaction_session.
+                    self.cancel_llm_interaction(self.active_interaction_session)
+                else:
+                    # User declined, ignore the new prompt
+                    print(f"User declined cancellation. Ignoring new prompt for {session_path}.", file=sys.stderr)
+                    eval_in_emacs("message", f"[Emigo] Agent busy with {self.active_interaction_session}. New prompt ignored.")
+                    return # Stop processing the new prompt
+
+            except Exception as e:
+                print(f"Error during confirmation/cancellation: {e}\n{traceback.format_exc()}", file=sys.stderr)
+                message_emacs(f"[Emigo Error] Failed to ask for cancellation confirmation: {e}")
+                return # Stop processing on error
+
+        # If we reach here, either no interaction was active, or the user confirmed cancellation.
+        # Mark the *new* session as active.
+        self.active_interaction_session = session_path
 
         # Get or create the session object
         session = self._get_or_create_session(session_path)
@@ -610,7 +613,7 @@ class Emigo:
 
         # Flush the user prompt to the Emacs buffer first
         eval_in_emacs("emigo--flush-buffer", session.session_path, f"\n\nUser:\n{prompt}\n", "user")
-        # Append user prompt to the session's history
+        # Append user prompt dictionary to the session's history
         session.append_history({"role": "user", "content": prompt})
 
         # --- Handle File Mentions (@file) ---
@@ -679,20 +682,81 @@ class Emigo:
 
         print("Stopping and restarting LLM worker due to cancellation request...", file=sys.stderr)
         self._stop_llm_worker()
+
+        # Drain the queue to discard messages from the stopped worker
+        print("Draining worker output queue...", file=sys.stderr)
+        drained_count = 0
+        while not self.worker_output_queue.empty():
+            try:
+                stale_msg = self.worker_output_queue.get_nowait()
+                # print(f"Discarding stale message: {stale_msg}", file=sys.stderr) # Optional: very verbose
+                drained_count += 1
+            except queue.Empty:
+                break
+            except Exception as e:
+                print(f"Error draining queue: {e}", file=sys.stderr)
+                break # Stop draining on error
+        print(f"Worker output queue drained ({drained_count} messages discarded).", file=sys.stderr)
+
         self._start_llm_worker()
-        print("LLM worker restarted.", file=sys.stderr)
+        # Check if worker restart was successful before proceeding
+        worker_restarted_ok = False
+        with self.llm_worker_lock:
+            if self.llm_worker_process and self.llm_worker_process.poll() is None:
+                 worker_restarted_ok = True
+
+        if not worker_restarted_ok:
+            print("ERROR: Failed to restart LLM worker after cancellation.", file=sys.stderr)
+            message_emacs("[Emigo Error] Failed to restart LLM worker after cancellation.")
+            # Clear active session state even on failure
+            self.active_interaction_session = None
+            self.pending_tool_requests.clear()
+            return False # Indicate failure
+
+        print("LLM worker restarted successfully.", file=sys.stderr)
+
+        # --- Restart the worker queue processor thread ---
+        print("Restarting worker queue processor thread...", file=sys.stderr)
+        self.worker_processor_thread = threading.Thread(target=self._process_worker_queue, name="WorkerQueueProcessorThread", daemon=True)
+        self.worker_processor_thread.start()
+        if not self.worker_processor_thread.is_alive():
+            print("ERROR: Failed to restart worker queue processor thread.", file=sys.stderr)
+            message_emacs("[Emigo Error] Failed to restart worker queue processor thread.")
+            # Stop the worker again if the processor fails
+            self._stop_llm_worker()
+            self.active_interaction_session = None
+            self.pending_tool_requests.clear()
+            return False # Indicate failure
+        print("Worker queue processor thread restarted.", file=sys.stderr)
+        # --- End restart queue processor ---
+
+
+        # Remove the last user message (the cancelled prompt) from history
+        session = self.sessions.get(session_path)
+        if session and session.history:
+            # History is stored as (timestamp, message_dict)
+            last_timestamp, last_message = session.history[-1]
+            if last_message.get("role") == "user":
+                print(f"Removing cancelled user prompt from history for {session_path}", file=sys.stderr)
+                session.history.pop()
+            else:
+                print(f"Warning: Last message in history for cancelled session {session_path} was not from user.", file=sys.stderr)
 
         # Clear active session state
         self.active_interaction_session = None
         # Clear any pending tool requests that belonged to the killed worker's task
         self.pending_tool_requests.clear()
 
+        # Invalidate the cache for the cancelled session to ensure fresh context next time
+        if session:
+            print(f"Invalidating cache for cancelled session: {session_path}", file=sys.stderr)
+            session.invalidate_cache()
+        else:
+             print(f"Warning: Could not find session {session_path} to invalidate cache after cancellation.", file=sys.stderr)
+
+
         # Notify Emacs buffer
         eval_in_emacs("emigo--flush-buffer", session_path, "\n[Interaction cancelled by user.]\n", "warning")
-        # Add cancellation marker to the session's history
-        session = self._get_or_create_session(session_path)
-        if session:
-            session.append_history({"role": "system", "content": "[Interaction cancelled by user]"})
         return True # Indicate success
 
     def cleanup(self):
