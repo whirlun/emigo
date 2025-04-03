@@ -45,6 +45,7 @@ import logging
 import pathlib
 import platform
 import sys
+import re
 
 from epc.client import EPCClient
 
@@ -274,3 +275,12 @@ def touch(path):
 
         with open(path, 'a'):
             os.utime(path)
+
+
+# --- Filtering Helper ---
+def _filter_environment_details(text: str) -> str:
+    """Removes <environment_details>...</environment_details> blocks from text."""
+    if not isinstance(text, str): # Handle potential non-string content
+        return text
+    # Use re.DOTALL to make '.' match newlines, make it non-greedy
+    return re.sub(r"<environment_details>.*?</environment_details>\s*", "", text, flags=re.DOTALL)

@@ -18,14 +18,16 @@ import os
 # --- Ignored Directories ---
 # Used in agents.py (_get_environment_details) and repomapper.py (_find_src_files)
 # Combine common ignored directories from both places.
-IGNORED_DIRS = {
-    '.git', '.hg', '.svn',               # Version control
-    '__pycache__',                       # Python cache
-    'node_modules',                      # Node.js dependencies
-    '.venv', 'venv', '.env', 'env',      # Virtual environments
-    'build', 'dist',                     # Build artifacts
-    'vendor'                             # Vendor dependencies (common in some languages)
-}
+IGNORED_DIRS = [
+    r'^\.emigo_repomap$',
+    r'^\.aider.*$',
+    r'^\.(git|hg|svn)$',                # Version control
+    r'^__pycache__$',                    # Python cache
+    r'^node_modules$',                   # Node.js dependencies
+    r'^(\.venv|venv|\.env|env)$',        # Virtual environments
+    r'^(build|dist)$',                   # Build artifacts
+    r'^vendor$'                          # Vendor dependencies (common in some languages)
+]
 
 # --- Ignored File Extensions (Binary/Non-Source) ---
 # Used in repomapper.py (_find_src_files)

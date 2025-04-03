@@ -27,7 +27,7 @@ import time
 from typing import Dict, List, Optional, Tuple
 
 from repomapper import RepoMapper
-from utils import read_file_content # Use the utility for consistent file reading
+from utils import read_file_content, _filter_environment_details
 
 class Session:
     """Encapsulates the state and operations for a single Emigo session."""
@@ -53,7 +53,10 @@ class Session:
         if "role" not in message or "content" not in message:
             print(f"Warning: Attempted to add invalid message to history: {message}", file=sys.stderr)
             return
-        self.history.append((time.time(), dict(message))) # Store copy
+        # Filter content before appending
+        filtered_message = dict(message) # Create a copy
+        filtered_message["content"] = _filter_environment_details(filtered_message["content"])
+        self.history.append((time.time(), filtered_message)) # Store filtered copy
 
     def clear_history(self):
         """Clears the chat history for this session."""
@@ -247,8 +250,11 @@ class Session:
         self.history = [] # Clear existing history
         for msg_dict in history_dicts:
             if "role" in msg_dict and "content" in msg_dict:
-                 # Add with current timestamp, store a copy
-                self.history.append((time.time(), dict(msg_dict)))
+                # Filter content before appending
+                filtered_message = dict(msg_dict) # Create a copy
+                filtered_message["content"] = _filter_environment_details(filtered_message["content"])
+                 # Add with current timestamp, store filtered copy
+                self.history.append((time.time(), filtered_message))
             else:
                 print(f"Warning: Skipping invalid message dict during set_history: {msg_dict}", file=sys.stderr)
 

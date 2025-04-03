@@ -35,6 +35,7 @@ project_root = os.path.dirname(os.path.abspath(__file__))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+from utils import _filter_environment_details
 from llm import LLMClient
 from agents import Agents
 
@@ -206,8 +207,9 @@ def handle_interaction_request(request):
                 # No tool use possible with empty response, break the loop
                 break # Exit loop, interaction ends here
             else:
-                # Add assistant's non-empty response to the local interaction history
-                 interaction_history.append({"role": "assistant", "content": full_response})
+                # Filter and add assistant's non-empty response to the local interaction history
+                filtered_response = _filter_environment_details(full_response)
+                interaction_history.append({"role": "assistant", "content": filtered_response})
 
             # 3. Process Response (Parse Tools) - Only if response was not empty
             tool_requests = agent._parse_tool_use(full_response) # Returns list of (tool_name, params)
@@ -252,8 +254,9 @@ def handle_interaction_request(request):
                     # Filter out the special completion marker if present
                     llm_tool_results = [res for res in tool_results if res != "COMPLETION_SIGNALLED"]
                     combined_tool_result = "\n\n".join(llm_tool_results)
-                    # Add tool results to the local interaction history using the 'tool' role
-                    interaction_history.append({"role": "system", "content": combined_tool_result})
+                    # Filter and add tool results to the local interaction history using the 'system' role (or 'tool')
+                    filtered_tool_result = _filter_environment_details(combined_tool_result)
+                    interaction_history.append({"role": "system", "content": filtered_tool_result})
 
                 # 6. Check if loop should break
                 if not should_continue_interaction:

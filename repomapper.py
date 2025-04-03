@@ -57,6 +57,7 @@ interface for standalone usage and debugging.
 import argparse
 import math
 import os
+import re # Import re module
 import shutil
 import sqlite3
 import sys
@@ -945,10 +946,13 @@ class RepoMapper:
             print(f"Scanning directory: {directory}", file=sys.stderr)
         for root, dirs, files in os.walk(directory, topdown=True):
             # Filter directories
-            # Use imported IGNORED_DIRS from config
+            # Use imported IGNORED_DIRS from config (as regex patterns)
             dirs[:] = [
                 d for d in dirs
-                if not (d.startswith('.') or d in IGNORED_DIRS)
+                if not (
+                    d.startswith('.') or # Ignore hidden directories
+                    any(re.match(pattern, d) for pattern in IGNORED_DIRS) # Check against regex patterns
+                )
             ]
 
             for file in files:

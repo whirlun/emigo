@@ -52,6 +52,7 @@ import subprocess
 import json
 import queue
 import time
+import re
 from typing import Dict, List, Optional, Tuple
 from system_prompt import (
     TOOL_DENIED,
@@ -61,9 +62,10 @@ from system_prompt import (
     TOOL_LIST_REPOMAP, TOOL_ASK_FOLLOWUP_QUESTION, TOOL_ATTEMPT_COMPLETION
 )
 from epc.server import ThreadingEPCServer
-from utils import *
-import re
-import json # For parsing JSON params before sending to tools
+from utils import (
+    init_epc_client, close_epc_client, eval_in_emacs, message_emacs,
+    get_emacs_vars, get_emacs_func_result, _filter_environment_details
+)
 from session import Session
 # Import tool dispatcher
 import tools
@@ -380,12 +382,13 @@ class Emigo:
 
                 if msg_type == "stream":
                     role = message.get("role", "llm") # Default to llm role
-                    # Ensure content is never None, default to empty string
+                    # Ensure content is never None, default to empty string, and filter it
                     content = message.get("content") or ""
-                    eval_in_emacs("emigo--flush-buffer", session_path, content, role)
-                    # Append streamed content to history immediately
-                    # Need to handle partial messages vs full assistant response
-                    # Let's append only when 'finished' message arrives for simplicity now.
+                    filtered_content = _filter_environment_details(content)
+                    # Only flush if there's content *after* filtering
+                    if filtered_content:
+                        eval_in_emacs("emigo--flush-buffer", session_path, filtered_content, role)
+                    # History is updated via the 'finished' message
 
                 elif msg_type == "tool_request":
                     request_id = message.get("request_id")
@@ -427,11 +430,21 @@ class Emigo:
                         if final_history and isinstance(final_history, list):
                             session = self._get_or_create_session(session_path)
                             if session:
-                                print(f"Updating session history for {session_path} with {len(final_history)} messages.", file=sys.stderr)
-                                session.set_history(final_history) # Use the new method
+                                # Filter history content before setting it
+                                filtered_history = []
+                                for msg in final_history:
+                                    if isinstance(msg, dict) and "content" in msg:
+                                        filtered_msg = dict(msg) # Copy message
+                                        filtered_msg["content"] = _filter_environment_details(msg["content"])
+                                        filtered_history.append(filtered_msg)
+                                    else:
+                                        filtered_history.append(msg) # Keep non-dict or content-less items as is
+
+                                print(f"Updating session history for {session_path} with {len(filtered_history)} filtered messages.", file=sys.stderr)
+                                session.set_history(filtered_history) # Use the filtered history
                             else:
                                 print(f"Error: Could not find session {session_path} to update history.", file=sys.stderr)
-                        else:
+                        elif status in ["success", "max_turns_reached"]: # Only warn if history was expected
                             print(f"Warning: Worker finished successfully but did not provide final history for {session_path}.", file=sys.stderr)
 
                     # Signal Emacs regardless of history update success
