@@ -57,9 +57,8 @@ from typing import Dict, List, Optional, Tuple
 from system_prompt import (
     TOOL_DENIED,
     # Tool Names
-    TOOL_EXECUTE_COMMAND, TOOL_READ_FILE, TOOL_WRITE_TO_FILE,
-    TOOL_REPLACE_IN_FILE, TOOL_SEARCH_FILES, TOOL_LIST_FILES,
-    TOOL_LIST_REPOMAP, TOOL_ASK_FOLLOWUP_QUESTION, TOOL_ATTEMPT_COMPLETION
+    TOOL_EXECUTE_COMMAND, TOOL_WRITE_TO_FILE,
+    TOOL_ATTEMPT_COMPLETION
 )
 from epc.server import ThreadingEPCServer
 from utils import (
@@ -806,7 +805,7 @@ class Emigo:
         drained_count = 0
         while not self.worker_output_queue.empty():
             try:
-                stale_msg = self.worker_output_queue.get_nowait()
+                _ = self.worker_output_queue.get_nowait()
                 # print(f"Discarding stale message: {stale_msg}", file=sys.stderr) # Optional: very verbose
                 drained_count += 1
             except queue.Empty:

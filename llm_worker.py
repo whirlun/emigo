@@ -226,12 +226,12 @@ def handle_interaction_request(request):
                 for tool_name, params in tool_requests:
                     # Special handling for completion tool
                     if tool_name == "attempt_completion":
-                        result_text = params.get("result", "")
-                        command = params.get("command", "")
+                        # result_text = params.get("result", "")
+                        # command = params.get("command", "")
                         # Send completion message to main process (which signals Emacs)
                         # The main process handles the "COMPLETION_SIGNALLED" logic now.
                         # We just need to request the tool execution.
-                        print(f"Worker: Requesting execution for completion tool", file=sys.stderr)
+                        # print(f"Worker: Requesting execution for completion tool", file=sys.stderr)
                         tool_result = request_tool_execution(session_path, tool_name, params)
                         tool_results.append(tool_result) # Append the result (e.g., "COMPLETION_SIGNALLED")
                         should_continue_interaction = False # End interaction after this tool

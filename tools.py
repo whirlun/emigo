@@ -87,8 +87,8 @@ def read_file(session: Session, params: Dict[str, str]) -> str:
     posix_rel_path = _posix_path(rel_path)
 
     # --- Fuzzy Matching Pre-check ---
-    similarity_threshold = 0.85 # Configurable threshold
-    context_lines = 3 # For error reporting
+    # similarity_threshold = 0.85 # Configurable threshold
+    # context_lines = 3 # For error reporting
 
     try:
         if not os.path.isfile(abs_path):

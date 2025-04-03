@@ -216,9 +216,6 @@ class RepoMap:
         if not other_files and not chat_files: # Need at least some files to map
             print("No files provided for repository map.", file=sys.stderr)
             return ""
-        # Combine chat_files and other_files for processing, but keep track of chat_files for ranking
-        all_files = set(chat_files) | set(other_files)
-
         start_time = time.time()
         try:
             files_listing = self.get_ranked_tags_map_uncached(
@@ -673,8 +670,10 @@ class RepoMap:
         self, chat_fnames, other_fnames, max_map_tokens, mentioned_fnames=None, mentioned_idents=None
     ):
         """Generates the map string from ranked tags, fitting it into the token limit."""
-        if not mentioned_fnames: mentioned_fnames = set()
-        if not mentioned_idents: mentioned_idents = set()
+        if not mentioned_fnames:
+            mentioned_fnames = set()
+        if not mentioned_idents:
+            mentioned_idents = set()
 
         ranked_tags = self.get_ranked_tags(
             chat_fnames, other_fnames, mentioned_fnames, mentioned_idents
@@ -766,7 +765,8 @@ class RepoMap:
     def render_tree(self, abs_fname, rel_fname, lois):
         """Renders code snippets for a file using TreeContext."""
         mtime = self.get_mtime(abs_fname)
-        if mtime is None: return f"# Error: Could not get mtime for {rel_fname}\n"
+        if mtime is None:
+            return f"# Error: Could not get mtime for {rel_fname}\n"
 
         # Cache key includes filename, lines of interest, and modification time
         lois_tuple = tuple(sorted(list(set(lois)))) # Ensure unique, sorted lines

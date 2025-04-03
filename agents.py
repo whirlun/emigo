@@ -12,16 +12,12 @@ import json # Keep for parsing LLM responses if needed
 import os
 import re
 import sys
-import traceback
 from typing import List, Dict, Optional, Tuple
 
 from llm import LLMClient
 from repomapper import RepoMapper # Keep for agent's internal use if needed (e.g., environment details)
 from system_prompt import (
-    MAIN_SYSTEM_PROMPT, TOOL_RESULT_SUCCESS, TOOL_RESULT_OUTPUT_PREFIX,
-    TOOL_DENIED, TOOL_ERROR_PREFIX, TOOL_ERROR_SUFFIX, NO_TOOL_USED_ERROR,
-    # Tool Names (keep for parsing)
-    TOOL_EXECUTE_COMMAND, TOOL_READ_FILE, TOOL_WRITE_TO_FILE,
+    MAIN_SYSTEM_PROMPT, TOOL_EXECUTE_COMMAND, TOOL_READ_FILE, TOOL_WRITE_TO_FILE,
     TOOL_REPLACE_IN_FILE, TOOL_SEARCH_FILES, TOOL_LIST_FILES,
     TOOL_LIST_REPOMAP, TOOL_ASK_FOLLOWUP_QUESTION, TOOL_ATTEMPT_COMPLETION
 )
@@ -251,7 +247,7 @@ class Agents:
                 if len(truncated) >= self.min_history_messages:
                     break
                 # If we're below min messages, keep going but warn
-                print(f"Warning: History exceeds token limit but below min message count", file=sys.stderr)
+                print("Warning: History exceeds token limit but below min message count", file=sys.stderr)
 
             truncated.insert(1, msg)  # Insert after first message
             current_tokens += msg_tokens
@@ -291,7 +287,7 @@ class Agents:
                 if len(truncated) >= self.min_history_messages:
                     break
                 # If we're below min messages, keep going but warn
-                print(f"Warning: History exceeds token limit but below min message count", file=sys.stderr)
+                print("Warning: History exceeds token limit but below min message count", file=sys.stderr)
 
             truncated.insert(1, msg)  # Insert after first message
             current_tokens += msg_tokens

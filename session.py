@@ -127,8 +127,10 @@ class Session:
             self._update_chat_files_info()
 
             # Clean up cache for the removed file
-            if rel_filename in self.caches['mtimes']: del self.caches['mtimes'][rel_filename]
-            if rel_filename in self.caches['contents']: del self.caches['contents'][rel_filename]
+            if rel_filename in self.caches['mtimes']:
+                del self.caches['mtimes'][rel_filename]
+            if rel_filename in self.caches['contents']:
+                del self.caches['contents'][rel_filename]
             return True, f"Removed '{rel_filename}' from context."
         else:
             return False, f"File '{rel_filename}' not found in context."
@@ -162,8 +164,10 @@ class Session:
         try:
             current_mtime = self.repo_mapper.repo_mapper.get_mtime(abs_path) # Access inner RepoMap
             if current_mtime is None: # File deleted or inaccessible
-                if rel_path in self.caches['mtimes']: del self.caches['mtimes'][rel_path]
-                if rel_path in self.caches['contents']: del self.caches['contents'][rel_path]
+                if rel_path in self.caches['mtimes']:
+                    del self.caches['mtimes'][rel_path]
+                if rel_path in self.caches['contents']:
+                    del self.caches['contents'][rel_path]
                 return False
 
             # If content is provided (e.g., after write/replace), use it. Otherwise, read.
@@ -171,7 +175,8 @@ class Session:
                 # Read only if mtime changed or not cached
                 last_mtime = self.caches['mtimes'].get(rel_path)
                 if last_mtime is None or current_mtime != last_mtime:
-                    if self.verbose: print(f"Cache miss/stale for {rel_path}, reading file.", file=sys.stderr)
+                    if self.verbose:
+                        print(f"Cache miss/stale for {rel_path}, reading file.", file=sys.stderr)
                     content = read_file_content(abs_path)
                 else:
                     # Content is up-to-date, no need to update cache content again
@@ -180,14 +185,17 @@ class Session:
             # Update cache
             self.caches['mtimes'][rel_path] = current_mtime
             self.caches['contents'][rel_path] = content
-            if self.verbose: print(f"Updated cache for {rel_path}", file=sys.stderr)
+            if self.verbose:
+                print(f"Updated cache for {rel_path}", file=sys.stderr)
             return True
 
         except Exception as e:
             print(f"Error updating cache for '{rel_path}': {e}", file=sys.stderr)
             # Invalidate cache on error
-            if rel_path in self.caches['mtimes']: del self.caches['mtimes'][rel_path]
-            if rel_path in self.caches['contents']: del self.caches['contents'][rel_path]
+            if rel_path in self.caches['mtimes']:
+                del self.caches['mtimes'][rel_path]
+            if rel_path in self.caches['contents']:
+                del self.caches['contents'][rel_path]
             return False
 
     def get_cached_content(self, rel_path: str) -> Optional[str]:
@@ -259,8 +267,10 @@ class Session:
                 except Exception as e:
                     details += f"## File: {posix_rel_path}\n# Error reading file: {e}\n\n"
                     # Clean up potentially stale cache entries on error
-                    if rel_path in self.caches['mtimes']: del self.caches['mtimes'][rel_path]
-                    if rel_path in self.caches['contents']: del self.caches['contents'][rel_path]
+                    if rel_path in self.caches['mtimes']:
+                        del self.caches['mtimes'][rel_path]
+                    if rel_path in self.caches['contents']:
+                        del self.caches['contents'][rel_path]
 
         details += "</environment_details>"
         return details
@@ -272,14 +282,18 @@ class Session:
     def invalidate_cache(self, rel_path: Optional[str] = None):
         """Invalidates cache for a specific file or the entire session."""
         if rel_path:
-            if rel_path in self.caches['mtimes']: del self.caches['mtimes'][rel_path]
-            if rel_path in self.caches['contents']: del self.caches['contents'][rel_path]
-            if self.verbose: print(f"Invalidated cache for {rel_path}", file=sys.stderr)
+            if rel_path in self.caches['mtimes']:
+                del self.caches['mtimes'][rel_path]
+            if rel_path in self.caches['contents']:
+                del self.caches['contents'][rel_path]
+            if self.verbose:
+                print(f"Invalidated cache for {rel_path}", file=sys.stderr)
         else:
             self.caches['mtimes'].clear()
             self.caches['contents'].clear()
             self.caches['last_repomap'] = None # Also clear repomap if invalidating all
-            if self.verbose: print(f"Invalidated all caches for session {self.session_path}", file=sys.stderr)
+            if self.verbose:
+                print(f"Invalidated all caches for session {self.session_path}", file=sys.stderr)
 
     def set_history(self, history_dicts: List[Dict]):
         """Replaces the current history with the provided list of message dictionaries."""
