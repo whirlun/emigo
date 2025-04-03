@@ -9,7 +9,7 @@
 ;; Copyright (C) 2025, Emigo, all rights reserved.
 ;; Created: 2025-03-29
 ;; Version: 0.5
-;; Last-Updated: Thu Apr  3 13:37:56 2025 (-0400)
+;; Last-Updated: Thu Apr  3 13:40:03 2025 (-0400)
 ;;           By: Mingde (Matthew) Zeng
 ;; Package-Requires: ((emacs "26.1") (transient "0.3.0") (compat "30.0.2.0") (markdown-mode "2.6"))
 ;; Keywords: ai emacs llm aider ai-pair-programming tools
@@ -203,7 +203,7 @@ Then Emigo will start by gdb, please send new issue with `emigo-name' buffer con
   "Enable this option to output performance data to ~/emigo.prof."
   :type 'boolean)
 
-(defcustom emigo-prompt-string "Emigo> "
+(defcustom emigo-prompt-symbol "Emigo> "
   "The prompt string used in Emigo buffers."
   :type 'string
   :group 'emigo)
@@ -407,7 +407,7 @@ as the session path."
       (emigo-create-window buffer) ;; Use the specific buffer
 
       ;; Insert prompt.
-      (insert (propertize (concat "\n\n" emigo-prompt-string) 'face font-lock-keyword-face)))))
+      (insert (propertize (concat "\n\n" emigo-prompt-symbol) 'face font-lock-keyword-face)))))
 
 ;; --- Dedicated Window Width Enforcement ---
 
@@ -571,9 +571,9 @@ Index 0 always corresponds to an empty prompt string."
 
       ;; Go to the end, find the start of the current prompt text, delete it, and insert history
       (goto-char (point-max))
-      (when (search-backward-regexp (concat "^" (regexp-quote emigo-prompt-string)) nil t)
+      (when (search-backward-regexp (concat "^" (regexp-quote emigo-prompt-symbol)) nil t)
         (progn ;; Ensure both actions happen only if search succeeds
-          (forward-char (length emigo-prompt-string))
+          (forward-char (length emigo-prompt-symbol))
           (delete-region (point) (point-max))))
       (insert (nth emigo-prompt-history-index emigo--prompt-history)))))
 
@@ -596,7 +596,7 @@ Index 0 always corresponds to an empty prompt string."
   (save-excursion
     (beginning-of-line)
     (and (eq major-mode 'emigo-mode)
-         (looking-at-p (concat "^" (regexp-quote emigo-prompt-string))))))
+         (looking-at-p (concat "^" (regexp-quote emigo-prompt-symbol))))))
 
 (define-derived-mode emigo-mode fundamental-mode "emigo"
   "Major mode for Emigo AI chat sessions.
@@ -620,7 +620,7 @@ Index 0 always corresponds to an empty prompt string."
   (if (emigo--protect-prompt-line-p)
       (progn
         (goto-char (line-beginning-position))
-        (forward-char (length emigo-prompt-string)))
+        (forward-char (length emigo-prompt-symbol)))
     (goto-char (line-beginning-position))))
 
 (defun emigo-backward-delete-char ()
@@ -629,10 +629,10 @@ This is similar to `backward-delete-char' but protects the prompt line."
   (interactive)
   (let ((prompt-start (save-excursion
                         (goto-char (line-beginning-position))
-                        (when (looking-at (regexp-quote emigo-prompt-string))
+                        (when (looking-at (regexp-quote emigo-prompt-symbol))
                           (point)))))
     (if (and prompt-start
-             (<= (point) (+ prompt-start (length emigo-prompt-string))))
+             (<= (point) (+ prompt-start (length emigo-prompt-symbol))))
         (ding)
       (backward-delete-char 1))))
 
@@ -645,13 +645,13 @@ If on a prompt line:
   (interactive)
   (when (emigo--protect-prompt-line-p)
     (let* ((line-start (line-beginning-position)))
-      (if (< (point) (+ line-start (length emigo-prompt-string)))
+      (if (< (point) (+ line-start (length emigo-prompt-symbol)))
           (ding)
         ;; We're after the prompt
         (let ((inhibit-read-only t))
           (if (eolp)
               ;; At end of line - kill whole line including newline
-              (kill-region (+ line-start (length emigo-prompt-string)) (line-end-position))
+              (kill-region (+ line-start (length emigo-prompt-symbol)) (line-end-position))
             ;; Not at end - kill from point to end
             (kill-region (point) (line-end-position))))))))
 
@@ -662,8 +662,8 @@ If on a prompt line:
   (setq-local emigo--llm-output "")
   (let ((prompt (save-excursion
                   (goto-char (point-max))
-                  (search-backward-regexp (concat "^" emigo-prompt-string) nil t)
-                  (forward-char (length emigo-prompt-string))
+                  (search-backward-regexp (concat "^" emigo-prompt-symbol) nil t)
+                  (forward-char (length emigo-prompt-symbol))
                   (string-trim (buffer-substring-no-properties (point) (point-max)))
                   )))
     (if (string-empty-p prompt)
@@ -674,8 +674,8 @@ If on a prompt line:
       (setq emigo-prompt-history-index 0)
       ;; Send prompt
       (goto-char (point-max)) ;; Go to end before searching back
-      (when (search-backward-regexp (concat "^" (regexp-quote emigo-prompt-string)) nil t)
-        (forward-char (length emigo-prompt-string))
+      (when (search-backward-regexp (concat "^" (regexp-quote emigo-prompt-symbol)) nil t)
+        (forward-char (length emigo-prompt-symbol))
         (delete-region (point) (point-max)))
       (emigo-call-async "emigo_send" emigo-session-path prompt))))
 
@@ -693,7 +693,7 @@ ROLE is optional and defaults to nil."
         (let ((inhibit-read-only t)) ;; Allow modification even if buffer is read-only
           ;; For all content, append at the appropriate position
           (goto-char (point-max))
-          (when (search-backward-regexp (concat "^" emigo-prompt-string) nil t)
+          (when (search-backward-regexp (concat "^" emigo-prompt-symbol) nil t)
             (forward-line -2)
             (goto-char (line-end-position)))
 
@@ -708,8 +708,8 @@ ROLE is optional and defaults to nil."
           ;; History is managed on the Python side
 
           (goto-char (point-max))
-          (when (search-backward-regexp (concat "^" emigo-prompt-string) nil t)
-            (forward-char (1- (length emigo-prompt-string)))
+          (when (search-backward-regexp (concat "^" emigo-prompt-symbol) nil t)
+            (forward-char (1- (length emigo-prompt-symbol)))
             (emigo-lock-region (point-min) (point))))))))
 
 (defun emigo-lock-region (beg end)
@@ -883,7 +883,7 @@ Display RESULT-TEXT and optionally offer to run COMMAND-STRING."
           ;; Go to the end of the buffer
           (goto-char (point-max))
           ;; Search backwards for the last prompt
-          (if (search-backward-regexp (concat "^" (regexp-quote emigo-prompt-string)) nil t)
+          (if (search-backward-regexp (concat "^" (regexp-quote emigo-prompt-symbol)) nil t)
               ;; If found, insert before the prompt
               (progn
                 (insert (propertize "\n--- Completion Attempt ---\n" 'face 'font-lock-comment-face))
@@ -1110,7 +1110,7 @@ Preserves the prompt history for convenience."
           ;; Erase buffer content and reset prompt
           (let ((inhibit-read-only t))
             (erase-buffer)
-            (insert (propertize (concat "\n\n" emigo-prompt-string) 'face font-lock-keyword-face))
+            (insert (propertize (concat "\n\n" emigo-prompt-symbol) 'face font-lock-keyword-face))
             (goto-char (point-max)))
           ;; Restore the prompt history after clearing
           (setq-local emigo--prompt-history saved-prompt-history)
