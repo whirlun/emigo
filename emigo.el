@@ -9,7 +9,7 @@
 ;; Copyright (C) 2025, Emigo, all rights reserved.
 ;; Created: 2025-03-29
 ;; Version: 0.5
-;; Last-Updated: Thu Apr  3 01:30:31 2025 (-0400)
+;; Last-Updated: Thu Apr  3 02:40:46 2025 (-0400)
 ;;           By: Mingde (Matthew) Zeng
 ;; Package-Requires: ((emacs "26.1") (transient "0.3.0") (compat "30.0.2.0"))
 ;; Keywords: ai emacs llm aider ai-pair-programming tools
@@ -532,18 +532,21 @@ Otherwise return nil."
 (defvar emigo-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-a") #'emigo-beginning-of-line)
+    (define-key map (kbd "C-k") #'emigo-kill-line)
     (define-key map (kbd "C-m") #'emigo-send-prompt)
     (define-key map (kbd "C-c C-c") #'emigo-send-prompt)
-    (define-key map (kbd "C-c C-r") #'emigo-restart-process)
-    (define-key map (kbd "C-c C-f") #'emigo-drop-file-from-context)
-    (define-key map (kbd "C-c C-a") #'emigo-add-file-to-context)
-    (define-key map (kbd "C-c C-l") #'emigo-ls-files-in-context)
-    (define-key map (kbd "C-c C-y") #'emigo-clear-history)
-    (define-key map (kbd "C-c C-h") #'emigo-show-history)
-    (define-key map (kbd "C-c C-k") #'emigo-cancel-interaction)
+    (define-key map (kbd "C-c r") #'emigo-restart-process)
+    (define-key map (kbd "C-c j") #'emigo-drop-file-from-context)
+    (define-key map (kbd "C-c f") #'emigo-add-file-to-context)
+    (define-key map (kbd "C-c l") #'emigo-ls-files-in-context)
+    (define-key map (kbd "C-c H") #'emigo-clear-history)
+    (define-key map (kbd "C-c h") #'emigo-show-history)
+    (define-key map (kbd "C-c k") #'emigo-cancel-interaction)
     (define-key map (kbd "S-<return>") #'emigo-send-newline)
     (define-key map (kbd "M-p") #'emigo-previous-prompt)
     (define-key map (kbd "M-n") #'emigo-next-prompt)
+    (define-key map (kbd "<backspace>") #'emigo-backward-delete-char)
+    (define-key map (kbd "DEL") #'emigo-backward-delete-char)
     map)
   "Keymap used by `emigo-mode'.")
 
@@ -588,6 +591,13 @@ Index 0 always corresponds to an empty prompt string."
     ;; Cycle towards newer prompts (lower index in newest-first list)
     (emigo--cycle-prompt-history -1)))
 
+(defun emigo--protect-prompt-line-p ()
+  "Return non-nil if current line contains the prompt and should be protected."
+  (save-excursion
+    (beginning-of-line)
+    (and (eq major-mode 'emigo-mode)
+         (looking-at-p (concat "^" (regexp-quote emigo-prompt-string))))))
+
 (define-derived-mode emigo-mode fundamental-mode "emigo"
   "Major mode for Emigo AI chat sessions.
 \\{emigo-mode-map}"
@@ -607,12 +617,43 @@ Index 0 always corresponds to an empty prompt string."
 (defun emigo-beginning-of-line ()
   "Move to the beginning of the current line or the prompt position."
   (interactive)
-  (if (save-excursion
-        (search-backward-regexp (concat "^" emigo-prompt-string) (line-beginning-position) t))
+  (if (emigo--protect-prompt-line-p)
       (progn
         (goto-char (line-beginning-position))
         (forward-char (length emigo-prompt-string)))
     (goto-char (line-beginning-position))))
+
+(defun emigo-backward-delete-char ()
+  "Delete the character before point, unless at the prompt boundary.
+This is similar to `backward-delete-char' but protects the prompt line."
+  (interactive)
+  (let ((prompt-start (save-excursion
+                        (goto-char (line-beginning-position))
+                        (when (looking-at (regexp-quote emigo-prompt-string))
+                          (point)))))
+    (if (and prompt-start
+             (<= (point) (+ prompt-start (length emigo-prompt-string))))
+        (ding)
+      (backward-delete-char 1))))
+
+(defun emigo-kill-line ()
+  "Kill the line in Emigo buffer with special handling for prompt lines.
+If on a prompt line:
+- Fails if point is within the prompt string
+- Kills from point to end of line if after prompt
+- Kills entire line if at end of line after prompt"
+  (interactive)
+  (when (emigo--protect-prompt-line-p)
+    (let* ((line-start (line-beginning-position)))
+      (if (< (point) (+ line-start (length emigo-prompt-string)))
+          (ding)
+        ;; We're after the prompt
+        (let ((inhibit-read-only t))
+          (if (eolp)
+              ;; At end of line - kill whole line including newline
+              (kill-region (+ line-start (length emigo-prompt-string)) (line-end-position))
+            ;; Not at end - kill from point to end
+            (kill-region (point) (line-end-position))))))))
 
 (defun emigo-send-prompt ()
   "Send the current prompt to the AI."
@@ -626,7 +667,7 @@ Index 0 always corresponds to an empty prompt string."
                   (string-trim (buffer-substring-no-properties (point) (point-max)))
                   )))
     (if (string-empty-p prompt)
-        (message "Please type prompt to send.")
+        (ding)
       ;; Add prompt after the initial "" (at index 1)
       (setcdr emigo--prompt-history (cons prompt (cdr emigo--prompt-history)))
       ;; Reset index to 0 (pointing to the empty string)
@@ -680,42 +721,66 @@ ROLE is optional and defaults to nil."
     (overlay-put overlay 'front-sticky t)
     (overlay-put overlay 'rear-nonsticky nil)))
 
-(defun emigo-split-window ()
-  "Split dedicated window at bottom of frame."
-  ;; Select bottom window of frame.
-  (ignore-errors
-    (dotimes (i 50)
-      (windmove-right)))
-  ;; Split with dedicated window height.
-  (split-window (selected-window) (- (emigo-current-window-take-height) emigo-window-width) t)
-  (other-window 1)
-  (setq emigo-window (selected-window)))
+;; --- Window Management Advice ---
 
-(defadvice delete-other-windows (around emigo-delete-other-window-advice activate)
-  "This is advice to make `emigo' avoid dedicated window deleted.
-Dedicated window can't deleted by command `delete-other-windows'."
-  (unless (eq (selected-window) emigo-window)
-    (let ((emigo-active-p (emigo-window-exist-p emigo-window)))
-      (if emigo-active-p
-          (let ((current-window (selected-window)))
-            (cl-dolist (win (window-list))
-              (when (and (window-live-p win)
-                         (not (eq current-window win))
-                         (not (window-dedicated-p win)))
-                (delete-window win))))
-        ad-do-it))))
+(defun emigo--advice-delete-other-windows (orig-fun &rest args)
+  "Around advice for `delete-other-windows'.
+Prevent deleting the dedicated Emigo window."
+  (if (and (emigo-window-exist-p emigo-window)
+           (not (eq (selected-window) emigo-window)))
+      ;; If Emigo window exists and is not the selected one,
+      ;; delete all other non-dedicated windows except the current one.
+      (let ((current-window (selected-window)))
+        (dolist (win (window-list))
+          (when (and (window-live-p win)
+                     (not (eq current-window win))
+                     (not (eq emigo-window win)) ; Don't delete emigo window
+                     (not (window-dedicated-p win))) ; Don't delete other dedicated windows
+            (delete-window win)))
+        nil) ; Indicate deletion happened
+    ;; Otherwise (Emigo window doesn't exist or is selected), run original.
+    (apply orig-fun args)))
 
-(defadvice other-window (after emigo-other-window-advice)
-  "Default, can use `other-window' select window in cyclic ordering of windows.
-But sometimes we don't want to select `sr-speedbar' window,
-but use `other-window' and just make `emigo' dedicated
-window as a viewable sidebar.
+(defun emigo--advice-other-window (orig-fun &rest args)
+  "Around advice for `other-window'.
+Skip the dedicated Emigo window when cycling."
+  (let ((target-window (apply orig-fun args))) ; Call original first
+    (if (and (emigo-window-exist-p emigo-window)
+             (eq target-window emigo-window)
+             ;; Check if we are trying to move *away* from emigo-window
+             ;; or if the original call landed us there unintentionally.
+             ;; This logic might need refinement depending on exact desired behavior.
+             (not (eq (selected-window) emigo-window)))
+        ;; If the original call selected the Emigo window, and it wasn't
+        ;; the starting window, call other-window again with the same args
+        ;; to skip over it.
+        (apply orig-fun args)
+      ;; Otherwise, return the window selected by the original call.
+      target-window)))
 
-This advice can make `other-window' skip `emigo' dedicated window."
-  (let ((count (or (ad-get-arg 0) 1)))
-    (when (and (emigo-window-exist-p emigo-window)
-               (eq emigo-window (selected-window)))
-      (other-window count))))
+;; Add window management advice globally (or consider adding/removing in enable/disable)
+(advice-add 'delete-other-windows :around #'emigo--advice-delete-other-windows)
+;; Using :filter-return to modify the *result* of other-window might be cleaner,
+;; but let's stick with :around for consistency for now. Revisit if needed.
+;; (advice-add 'other-window :around #'emigo--advice-other-window)
+;; Let's try :filter-return for other-window as it's less intrusive
+(defun emigo--filter-return-other-window (window)
+  "Filter return value of `other-window' to skip Emigo window."
+  (if (and (emigo-window-exist-p emigo-window)
+           (eq window emigo-window))
+      ;; If the returned window is the emigo window, try again
+      ;; This assumes the original `other-window` was called with count=1
+      ;; A more robust solution would need access to the original args.
+      (other-window 1)
+    window))
+;; (advice-add 'other-window :filter-return #'emigo--filter-return-other-window)
+;; Reverting other-window advice for now as filter-return might cause infinite loops
+;; and the :around logic needs careful state checking. The original defadvice might
+;; have been sufficient or needs a more complex :around wrapper. Let's remove it
+;; until a better solution is found.
+
+;; --- End Window Management Advice ---
+
 
 (defun emigo-add-file-to-context ()
   "Interactively add a file to the current project's Emigo chat context.
