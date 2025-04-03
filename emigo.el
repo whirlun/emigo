@@ -9,7 +9,7 @@
 ;; Copyright (C) 2025, Emigo, all rights reserved.
 ;; Created: 2025-03-29
 ;; Version: 0.5
-;; Last-Updated: Thu Apr  3 02:40:46 2025 (-0400)
+;; Last-Updated: Thu Apr  3 03:17:33 2025 (-0400)
 ;;           By: Mingde (Matthew) Zeng
 ;; Package-Requires: ((emacs "26.1") (transient "0.3.0") (compat "30.0.2.0"))
 ;; Keywords: ai emacs llm aider ai-pair-programming tools
@@ -541,7 +541,7 @@ Otherwise return nil."
     (define-key map (kbd "C-c l") #'emigo-ls-files-in-context)
     (define-key map (kbd "C-c H") #'emigo-clear-history)
     (define-key map (kbd "C-c h") #'emigo-show-history)
-    (define-key map (kbd "C-c k") #'emigo-cancel-interaction)
+    (define-key map (kbd "C-c k") #'emigo-stop-call)
     (define-key map (kbd "S-<return>") #'emigo-send-newline)
     (define-key map (kbd "M-p") #'emigo-previous-prompt)
     (define-key map (kbd "M-n") #'emigo-next-prompt)
@@ -1140,8 +1140,8 @@ Preserves the prompt history for convenience."
             (progn
               ;; Restore the prompt history after clearing
               (setq-local emigo--prompt-history saved-prompt-history)
-              (message "Cleared history for session: %s" (file-name-nondirectory emigo-session-path)))
-          (message "Failed to clear history for session: %s" (file-name-nondirectory emigo-session-path)))))))
+              (message "Cleared history for session: %s" emigo-session-path))
+          (message "Failed to clear history for session: %s" emigo-session-path))))))
 
 (defun emigo-show-history ()
   "Display the chat history for the current Emigo session in a new Org buffer."
@@ -1149,9 +1149,9 @@ Preserves the prompt history for convenience."
   (unless (emigo--is-emigo-buffer-p)
     (error "Not in an Emigo buffer"))
 
-  (let* ((history-buffer-name (format "*emigo-history:%s*" (file-name-nondirectory emigo-session-path)))
+  (let* ((history-buffer-name (format "*emigo-history:%s*" emigo-session-path))
          (buf (get-buffer-create history-buffer-name))
-         ;; Fetch history from Python side
+         (session-path emigo-session-path)
          (history (emigo-call--sync "get_history" emigo-session-path)))
 
     ;; Check if history is a list (basic validation)
@@ -1162,12 +1162,22 @@ Preserves the prompt history for convenience."
 
     (with-current-buffer buf
       (let ((inhibit-read-only t)) ;; Allow modification during setup
-        (erase-buffer)
-        (org-mode)
-        (display-line-numbers-mode 1)
-        (setq-local buffer-read-only t)
-        ;; Wrap kill-this-buffer in an interactive lambda
+        (erase-buffer)) ;; Erase first
+      ;; Set modes *after* erasing and outside inhibit-read-only
+      (org-mode)
+      (setq buffer-read-only nil) ;; Make buffer writable
+      (display-line-numbers-mode 1)
+      ;; Store original session path for resending
+      (setq-local emigo-session-path session-path)
+      ;; Keybindings for the history buffer
+      (local-set-key (kbd "q") (lambda () (interactive) (kill-this-buffer)))
+      (local-set-key (kbd "C-c C-c") #'emigo-send-revised-history) ; New binding
+
+      ;; Re-enable inhibit-read-only just for insertion if needed, though likely not necessary now
+      (let ((inhibit-read-only t))
+        ;; Keybindings for the history buffer
         (local-set-key (kbd "q") (lambda () (interactive) (kill-this-buffer)))
+        (local-set-key (kbd "C-c C-c") #'emigo-send-revised-history) ; New binding
 
         ;; Iterate through history (list of (timestamp plist) lists from Python)
         (dolist (entry history)
@@ -1185,7 +1195,53 @@ Preserves the prompt history for convenience."
                             (string-trim content)))))))
     (switch-to-buffer-other-window buf)))
 
-(defun emigo-cancel-interaction ()
+(defun emigo--parse-history-buffer ()
+  "Parse the current Org-mode history buffer into a list of message plists.
+Returns a list suitable for sending back to Python: '((:role \"user\" :content \"...\") ...)."
+  (unless (string-match-p "^\\*emigo-history:.*\\*$" (buffer-name))
+    (error "Not in an Emigo history buffer"))
+  (save-excursion
+    (goto-char (point-min))
+    (let ((history-list '()))
+      (while (re-search-forward "^\\* \\[.*\\] \\(.*?\\)\n#\\+BEGIN_SRC.*?\\n\\(\\(?:.\\|\n\\)*?\\)#\\+END_SRC" nil t)
+        (let* ((role-str (downcase (match-string 1))) ;; user, assistant, tool, etc.
+               ;; Extract content *without* properties between BEGIN_SRC and END_SRC
+               (content-start (match-beginning 2))
+               (content-end (match-end 2))
+               ;; Ensure start/end are valid before extracting
+               (content (if (and content-start content-end)
+                            (buffer-substring-no-properties content-start content-end)
+                          ""))) ;; Default to empty string if match fails
+          ;; Construct the plist for this message, ensuring content is trimmed
+          (push `(:role ,role-str :content ,(string-trim content)) history-list)))
+      ;; Reverse the list to maintain original order
+      (nreverse history-list))))
+
+(defun emigo-send-revised-history ()
+  "Parse the current history buffer and send it to start a new interaction."
+  (interactive)
+  (unless (string-match-p "^\\*emigo-history:.*\\*$" (buffer-name))
+    (error "Not in an Emigo history buffer"))
+  (unless (emigo-epc-live-p emigo-epc-process)
+    (message "[Emigo] Process not running.")
+    (emigo-start-process)
+    (error "Emigo process was not running, please try again shortly."))
+  (unless emigo-session-path
+    (error "[Emigo] Could not determine original session path from history buffer"))
+
+  (let ((revised-history (emigo--parse-history-buffer)))
+    (if (null revised-history)
+        (message "[Emigo] History buffer is empty or could not be parsed.")
+      (progn
+        (message "[Emigo] Sending revised history to agent for session: %s" emigo-session-path)
+        ;; Call the new Python EPC method
+        (emigo-call-async "emigo_send_revised_history" emigo-session-path revised-history)
+        ;; Optionally switch back to the main emigo buffer automatically
+        (let ((main-buffer-name (format "*emigo:%s*" emigo-session-path)))
+          (when (get-buffer main-buffer-name)
+            (switch-to-buffer-other-window main-buffer-name)))))))
+
+(defun emigo-stop-call ()
   "Cancel the currently running LLM interaction for this session."
   (interactive)
   (unless (emigo--is-emigo-buffer-p)
@@ -1198,7 +1254,7 @@ Preserves the prompt history for convenience."
   (unless emigo-session-path
     (error "[Emigo] Could not determine session path from buffer"))
 
-  (message "[Emigo] Requesting cancellation for session: %s" (file-name-nondirectory emigo-session-path))
+  (message "[Emigo] Requesting cancellation for session: %s" emigo-session-path)
   ;; Call the new Python EPC method asynchronously
   (emigo-call-async "cancel_llm_interaction" emigo-session-path))
 

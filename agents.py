@@ -222,8 +222,11 @@ class Agents:
             # Send the temporary list with context included
             response_stream = self.llm_client.send(messages_to_send, stream=True)
             for chunk in response_stream:
-                eval_in_emacs("emigo--flush-buffer", self.session_path, str(chunk), "llm")
-                full_response += chunk
+                # Ensure chunk is a string, default to empty string if None
+                content_to_flush = chunk or ""
+                eval_in_emacs("emigo--flush-buffer", self.session_path, content_to_flush, "llm")
+                if chunk: # Only append non-None chunks to full_response
+                    full_response += chunk
             return full_response
         except Exception as e:
             error_message = f"[Error during LLM communication: {e}]"

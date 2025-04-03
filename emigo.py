@@ -85,8 +85,8 @@ class Emigo:
             init_epc_client(elisp_epc_port)
             print(f"Emigo __init__: EPC client initialized for Elisp port {elisp_epc_port}", file=sys.stderr, flush=True) # DEBUG + flush
         except (IndexError, ValueError) as e:
-             print(f"Emigo __init__: ERROR - Invalid or missing Elisp EPC port argument: {args}. Error: {e}", file=sys.stderr, flush=True) # DEBUG + flush
-             sys.exit(1)
+            print(f"Emigo __init__: ERROR - Invalid or missing Elisp EPC port argument: {args}. Error: {e}", file=sys.stderr, flush=True) # DEBUG + flush
+            sys.exit(1)
         except Exception as e:
             print(f"Emigo __init__: ERROR initializing/connecting EPC client to Elisp: {e}\n{traceback.format_exc()}", file=sys.stderr, flush=True) # DEBUG + flush
             sys.exit(1) # Exit if we can't connect back to Emacs
@@ -138,9 +138,9 @@ class Emigo:
             # Give the server a moment to bind the port
             time.sleep(0.1)
             if not self.server_thread.is_alive():
-                 print("Emigo __init__: ERROR - Python EPC server thread failed to start.", file=sys.stderr, flush=True)
-                 sys.exit(1)
-            print(f"Emigo __init__: Python EPC server thread started. Listening on port {self.server.server_address[1]}", file=sys.stderr, flush=True) # DEBUG + flush
+                print("Emigo __init__: ERROR - Python EPC server thread failed to start.", file=sys.stderr, flush=True)
+                sys.exit(1)
+                print(f"Emigo __init__: Python EPC server thread started. Listening on port {self.server.server_address[1]}", file=sys.stderr, flush=True) # DEBUG + flush
         except Exception as e:
             print(f"Emigo __init__: ERROR starting Python EPC server thread: {e}\n{traceback.format_exc()}", file=sys.stderr, flush=True) # DEBUG + flush
             sys.exit(1) # Exit if server thread fails
@@ -155,15 +155,15 @@ class Emigo:
                 worker_ok = True
 
         if not worker_ok:
-             print("Emigo __init__: ERROR - LLM worker process failed to start or exited immediately.", file=sys.stderr, flush=True)
-             # Attempt to read stderr if process object exists
-             if self.llm_worker_process and self.llm_worker_process.stderr:
-                 try:
-                     stderr_output = self.llm_worker_process.stderr.read()
-                     print(f"Emigo __init__: Worker stderr upon exit:\n{stderr_output}", file=sys.stderr, flush=True)
-                 except Exception as read_err:
-                     print(f"Emigo __init__: Error reading worker stderr after exit: {read_err}", file=sys.stderr, flush=True)
-             sys.exit(1) # Exit if worker failed
+            print("Emigo __init__: ERROR - LLM worker process failed to start or exited immediately.", file=sys.stderr, flush=True)
+            # Attempt to read stderr if process object exists
+            if self.llm_worker_process and self.llm_worker_process.stderr:
+                try:
+                    stderr_output = self.llm_worker_process.stderr.read()
+                    print(f"Emigo __init__: Worker stderr upon exit:\n{stderr_output}", file=sys.stderr, flush=True)
+                except Exception as read_err:
+                    print(f"Emigo __init__: Error reading worker stderr after exit: {read_err}", file=sys.stderr, flush=True)
+                    sys.exit(1) # Exit if worker failed
 
         print("Emigo __init__: LLM worker process started successfully.", file=sys.stderr, flush=True) # DEBUG + flush
 
@@ -173,7 +173,7 @@ class Emigo:
         if not self.worker_processor_thread.is_alive():
             print("Emigo __init__: ERROR - Worker queue processor thread failed to start.", file=sys.stderr, flush=True)
             sys.exit(1)
-        print("Emigo __init__: Worker queue processor thread started.", file=sys.stderr, flush=True) # DEBUG + flush
+            print("Emigo __init__: Worker queue processor thread started.", file=sys.stderr, flush=True) # DEBUG + flush
 
         # Pass Python epc port back to Emacs when first start emigo.
         try:
@@ -217,16 +217,16 @@ class Emigo:
                 # Brief pause to see if process exits immediately
                 time.sleep(0.2)
                 if self.llm_worker_process.poll() is not None:
-                     print(f"_start_llm_worker: ERROR - LLM worker process exited immediately with code {self.llm_worker_process.poll()}.", file=sys.stderr, flush=True)
-                     # Try reading stderr quickly
-                     try:
-                         stderr_output = self.llm_worker_process.stderr.read()
-                         print(f"_start_llm_worker: Worker stderr upon exit:\n{stderr_output}", file=sys.stderr, flush=True)
-                     except Exception as read_err:
-                         print(f"_start_llm_worker: Error reading worker stderr after exit: {read_err}", file=sys.stderr, flush=True)
-                     self.llm_worker_process = None
-                     message_emacs(f"Error: LLM worker process failed to start (exit code {self.llm_worker_process.poll()}). Check *Messages* or Emigo process buffer.")
-                     return # Exit the function
+                    print(f"_start_llm_worker: ERROR - LLM worker process exited immediately with code {self.llm_worker_process.poll()}.", file=sys.stderr, flush=True)
+                    # Try reading stderr quickly
+                    try:
+                        stderr_output = self.llm_worker_process.stderr.read()
+                        print(f"_start_llm_worker: Worker stderr upon exit:\n{stderr_output}", file=sys.stderr, flush=True)
+                    except Exception as read_err:
+                        print(f"_start_llm_worker: Error reading worker stderr after exit: {read_err}", file=sys.stderr, flush=True)
+                        self.llm_worker_process = None
+                        message_emacs(f"Error: LLM worker process failed to start (exit code {self.llm_worker_process.poll()}). Check *Messages* or Emigo process buffer.")
+                    return # Exit the function
 
                 print(f"_start_llm_worker: LLM worker started (PID: {self.llm_worker_process.pid}).", file=sys.stderr, flush=True) # DEBUG + flush
 
@@ -235,23 +235,23 @@ class Emigo:
                 self.llm_worker_reader_thread = threading.Thread(target=self._read_worker_stdout, name="WorkerStdoutReader", daemon=True)
                 self.llm_worker_reader_thread.start()
                 if not self.llm_worker_reader_thread.is_alive():
-                     print("_start_llm_worker: ERROR - stdout reader thread failed to start.", file=sys.stderr, flush=True)
-                     # Attempt to stop worker if it's running
-                     if self.llm_worker_process and self.llm_worker_process.poll() is None:
-                         self.llm_worker_process.terminate()
-                     self.llm_worker_process = None
-                     return
+                    print("_start_llm_worker: ERROR - stdout reader thread failed to start.", file=sys.stderr, flush=True)
+                    # Attempt to stop worker if it's running
+                    if self.llm_worker_process and self.llm_worker_process.poll() is None:
+                        self.llm_worker_process.terminate()
+                        self.llm_worker_process = None
+                    return
 
                 print("_start_llm_worker: Starting stderr reader thread...", file=sys.stderr, flush=True) # DEBUG + flush
                 self.llm_worker_stderr_thread = threading.Thread(target=self._read_worker_stderr, name="WorkerStderrReader", daemon=True)
                 self.llm_worker_stderr_thread.start()
                 if not self.llm_worker_stderr_thread.is_alive():
-                     print("_start_llm_worker: ERROR - stderr reader thread failed to start.", file=sys.stderr, flush=True)
-                     # Attempt cleanup
-                     if self.llm_worker_process and self.llm_worker_process.poll() is None:
-                         self.llm_worker_process.terminate()
-                     self.llm_worker_process = None
-                     return
+                    print("_start_llm_worker: ERROR - stderr reader thread failed to start.", file=sys.stderr, flush=True)
+                    # Attempt cleanup
+                    if self.llm_worker_process and self.llm_worker_process.poll() is None:
+                        self.llm_worker_process.terminate()
+                        self.llm_worker_process = None
+                    return
 
                 print("_start_llm_worker: Worker process and reader threads seem to be started.", file=sys.stderr, flush=True) # DEBUG + flush
 
@@ -290,8 +290,8 @@ class Emigo:
                         self.llm_worker_process.kill() # Force kill
                     except Exception as e:
                         print(f"Error stopping LLM worker: {e}", file=sys.stderr)
-                self.llm_worker_process = None # Ensure process is marked as None
-                print("LLM worker process stopped.", file=sys.stderr)
+                        self.llm_worker_process = None # Ensure process is marked as None
+                        print("LLM worker process stopped.", file=sys.stderr)
 
             # Signal and wait for the queue processor thread to finish
             if hasattr(self, 'worker_processor_thread') and self.worker_processor_thread and self.worker_processor_thread.is_alive():
@@ -300,7 +300,7 @@ class Emigo:
                 self.worker_processor_thread.join(timeout=2) # Wait for it
                 if self.worker_processor_thread.is_alive():
                     print("Warning: Worker queue processor thread did not exit cleanly.", file=sys.stderr)
-            self.worker_processor_thread = None # Mark as stopped
+                    self.worker_processor_thread = None # Mark as stopped
 
     def _read_worker_stdout(self):
         """Reads stdout lines from the worker and puts them in a queue."""
@@ -382,7 +382,8 @@ class Emigo:
 
                 if msg_type == "stream":
                     role = message.get("role", "llm") # Default to llm role
-                    content = message.get("content", "")
+                    # Ensure content is never None, default to empty string
+                    content = message.get("content") or ""
                     eval_in_emacs("emigo--flush-buffer", session_path, content, role)
                     # Append streamed content to history immediately
                     # Need to handle partial messages vs full assistant response
@@ -459,7 +460,7 @@ class Emigo:
                             "details": details
                         })
                     else:
-                         print(f"Invalid get_environment_details_request from worker (missing request_id): {message}", file=sys.stderr)
+                        print(f"Invalid get_environment_details_request from worker (missing request_id): {message}", file=sys.stderr)
 
 
                 # Handle other message types (status, pong, etc.) if needed
@@ -516,7 +517,7 @@ class Emigo:
                 print(f"Completion signalled for {session_path}. Clearing active session flag immediately.", file=sys.stderr)
                 self.active_interaction_session = None
             else:
-                 # This shouldn't happen if logic is correct, but log if it does
+                # This shouldn't happen if logic is correct, but log if it does
                  print(f"Warning: Completion signalled for {session_path}, but it wasn't the active session ({self.active_interaction_session}).", file=sys.stderr)
 
         return tool_result
@@ -571,7 +572,113 @@ class Emigo:
         message_emacs(msg) # Display message (success or error) in Emacs
         return success
 
-    # --- Main Interaction Logic ---
+    def emigo_send_revised_history(self, session_path: str, revised_history: List[Dict]):
+        """
+        EPC: Handles sending a potentially modified history back to the LLM.
+
+        Args:
+            session_path: The path identifying the session.
+            revised_history: A list of message dictionaries representing the
+                            new history baseline.
+        """
+        print(f"Received revised history for session: {session_path}", file=sys.stderr)
+
+        if not revised_history:
+            message_emacs("[Emigo Error] Received empty revised history.")
+            return
+
+        # Check for active interaction (similar to emigo_send)
+        if self.active_interaction_session:
+            print(f"Interaction already active for session {self.active_interaction_session}. Asking user about new prompt for {session_path}.", file=sys.stderr)
+            try:
+                confirm_cancel = get_emacs_func_result("yes-or-no-p",
+                                                       "Agent is currently running, do you want to stop it and re-run with the revised history?")
+                if confirm_cancel:
+                    print(f"User confirmed cancellation of {self.active_interaction_session}. Proceeding with revised history for {session_path}.", file=sys.stderr)
+                    if not self.cancel_llm_interaction(self.active_interaction_session):
+                        message_emacs("[Emigo Error] Failed to cancel previous interaction.")
+                        return # Stop if cancellation failed
+                else:
+                    print(f"User declined cancellation. Ignoring revised history for {session_path}.", file=sys.stderr)
+                    eval_in_emacs("message", f"[Emigo] Agent busy with {self.active_interaction_session}. Revised history ignored.")
+                    return
+            except Exception as e:
+                print(f"Error during confirmation/cancellation: {e}\n{traceback.format_exc()}", file=sys.stderr)
+                message_emacs(f"[Emigo Error] Failed to ask for cancellation confirmation: {e}")
+                return
+
+        # Mark session as active
+        self.active_interaction_session = session_path
+
+        session = self._get_or_create_session(session_path)
+        if not session:
+            eval_in_emacs("emigo--flush-buffer", f"invalid-session-{session_path}", f"[Error: Invalid session path '{session_path}']", "error")
+            self.active_interaction_session = None # Clear flag on error
+            return
+
+        # Convert Elisp plist format (list of lists) to Python list of dicts
+        history_dicts = []
+        if isinstance(revised_history, list):
+            for item in revised_history:
+                if isinstance(item, list) and len(item) == 4 and item[0] == ':role' and item[2] == ':content':
+                    history_dicts.append({'role': item[1], 'content': item[3]})
+                else:
+                    print(f"Warning: Skipping invalid item in revised_history: {item}", file=sys.stderr)
+        else:
+             message_emacs(f"[Emigo Error] Received revised history is not a list: {type(revised_history)}")
+             self.active_interaction_session = None # Clear flag on error
+             return
+
+
+        # Replace the session's history with the *converted* list of dicts
+        print(f"Replacing history for session {session_path} with {len(history_dicts)} revised messages.", file=sys.stderr)
+        session.set_history(history_dicts) # Pass the converted list
+
+        # --- Prepare data for worker ---
+        # The 'prompt' is effectively the last message in the revised history (now dicts)
+        last_message_content = history_dicts[-1].get("content", "") if history_dicts else ""
+
+        # Get current state snapshot (history is now the revised one)
+        session_history = session.get_history() # This now returns the revised history
+        session_chat_files = session.get_chat_files()
+        environment_details_str = session.get_environment_details_string()
+
+        # Get model config (same as emigo_send)
+        vars_result = get_emacs_vars(["emigo-model", "emigo-base-url", "emigo-api-key"])
+        if not vars_result or len(vars_result) < 3:
+            message_emacs(f"Error retrieving Emacs variables for session {session_path}.")
+            self.active_interaction_session = None
+            return
+        model, base_url, api_key = vars_result
+
+        if not model:
+            message_emacs(f"Please set emigo-model before starting session {session.session_path}.")
+            self.active_interaction_session = None
+            return
+
+        worker_config = {
+            "model": model,
+            "api_key": api_key if api_key else None,
+            "base_url": base_url if base_url else None,
+            "verbose": session.verbose
+        }
+
+        request_data = {
+            "session_path": session.session_path,
+            "prompt": last_message_content, # Use last message as nominal prompt
+            "history": session_history, # Pass the revised history snapshot
+            "config": worker_config,
+            "chat_files": session_chat_files,
+            "environment_details": environment_details_str,
+        }
+
+       # --- Send request to worker ---
+        print(f"Sending revised interaction request to worker for session {session.session_path}", file=sys.stderr)
+        self._send_to_worker({
+            "type": "interaction_request",
+            "data": request_data
+        })
+        # Response handling happens asynchronously
 
     def emigo_send(self, session_path: str, prompt: str):
         """EPC: Handles a user prompt by initiating an interaction with the LLM worker."""
@@ -696,14 +803,14 @@ class Emigo:
             except Exception as e:
                 print(f"Error draining queue: {e}", file=sys.stderr)
                 break # Stop draining on error
-        print(f"Worker output queue drained ({drained_count} messages discarded).", file=sys.stderr)
+            print(f"Worker output queue drained ({drained_count} messages discarded).", file=sys.stderr)
 
         self._start_llm_worker()
         # Check if worker restart was successful before proceeding
         worker_restarted_ok = False
         with self.llm_worker_lock:
             if self.llm_worker_process and self.llm_worker_process.poll() is None:
-                 worker_restarted_ok = True
+                worker_restarted_ok = True
 
         if not worker_restarted_ok:
             print("ERROR: Failed to restart LLM worker after cancellation.", file=sys.stderr)
@@ -752,8 +859,7 @@ class Emigo:
             print(f"Invalidating cache for cancelled session: {session_path}", file=sys.stderr)
             session.invalidate_cache()
         else:
-             print(f"Warning: Could not find session {session_path} to invalidate cache after cancellation.", file=sys.stderr)
-
+            print(f"Warning: Could not find session {session_path} to invalidate cache after cancellation.", file=sys.stderr)
 
         # Notify Emacs buffer
         eval_in_emacs("emigo--flush-buffer", session_path, "\n[Interaction cancelled by user.]\n", "warning")
@@ -809,7 +915,7 @@ if __name__ == "__main__":
             try:
                 emigo.cleanup()
             except Exception as cleanup_err:
-                 print(f"Error during cleanup: {cleanup_err}", file=sys.stderr, flush=True)
-        sys.exit(1) # Exit with error code
+                print(f"Error during cleanup: {cleanup_err}", file=sys.stderr, flush=True)
+                sys.exit(1) # Exit with error code
     finally:
         print("emigo.py main execution finished.", file=sys.stderr, flush=True) # DEBUG + flush
