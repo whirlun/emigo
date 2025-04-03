@@ -149,18 +149,10 @@ class Agents:
         messages_to_send.extend(self._truncate_history(current_interaction_history))
 
         # --- Append Environment Details (Stored in self.environment_details_str) ---
-        # Append to the *last* message if it's from the user, otherwise add as system message
-        if messages_to_send[-1]["role"] == "user":
-            # Use copy() to avoid modifying the history object directly
-            last_message_copy = messages_to_send[-1].copy()
-            last_message_copy["content"] += f"\n\n{self.environment_details_str}" # Append stored details
-            messages_to_send[-1] = last_message_copy # Replace the last message
-        else:
-            # This case should ideally not happen if history alternates correctly,
-            # but add details as a separate system message if it does.
-            print("Warning: Last message before sending to LLM is not 'user'. Appending environment details as system message.", file=sys.stderr)
-            messages_to_send.append({"role": "system", "content": self.environment_details_str})
-
+        # Use copy() to avoid modifying the history object directly
+        last_message_copy = messages_to_send[-1].copy()
+        last_message_copy["content"] += f"\n\n{self.environment_details_str}" # Append stored details
+        messages_to_send[-1] = last_message_copy # Replace the last message
 
         # --- Verbose Logging (Moved from LLMClient) ---
         if self.verbose:
