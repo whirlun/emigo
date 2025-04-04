@@ -9,7 +9,7 @@
 ;; Copyright (C) 2025, Emigo, all rights reserved.
 ;; Created: 2025-03-29
 ;; Version: 0.5
-;; Last-Updated: Thu Apr  3 22:25:28 2025 (-0400)
+;; Last-Updated: Fri Apr  4 02:48:34 2025 (-0400)
 ;;           By: Mingde (Matthew) Zeng
 ;; Package-Requires: ((emacs "26.1") (transient "0.3.0") (compat "30.0.2.0") (markdown-mode "2.6"))
 ;; Keywords: ai emacs llm aider ai-pair-programming tools
@@ -92,7 +92,7 @@
 
 (defun emigo--eval-in-emacs-func (sexp-string)
   (eval (read sexp-string))
-  ;; Return nil to avoid epc error `Got too many arguments in the reply'.
+  ;; Return nil to avoid epc error `Got too many parameters in the reply'.
   nil)
 
 (defun emigo--get-emacs-var-func (var-name)
@@ -262,7 +262,7 @@ Then Emigo will start by gdb, please send new issue with `emigo-name' buffer con
                           (list "profile"))
                         )))
 
-      ;; Set process arguments.
+      ;; Set process parameters.
       (if emigo-enable-debug
           (progn
             (setq emigo-internal-process-prog "gdb")
@@ -549,6 +549,7 @@ Otherwise return nil."
     (define-key map (kbd "C-c l") #'emigo-ls-files-in-context)
     (define-key map (kbd "C-c H") #'emigo-clear-history)
     (define-key map (kbd "C-c h") #'emigo-show-history)
+    (define-key map (kbd "C-c p") #'emigo-show-proc-buffer)
     (define-key map (kbd "C-c k") #'emigo-stop-call)
     (define-key map (kbd "S-<return>") #'emigo-send-newline)
     (define-key map (kbd "M-p") #'emigo-previous-prompt)
@@ -695,7 +696,6 @@ ROLE is optional and defaults to nil."
     (unless buffer
       (warn "[Emigo] Could not find buffer for session %s to flush content." session-path)
       (cl-return-from emigo-flush-buffer))
-
     (with-current-buffer buffer
       (save-excursion
         (let ((inhibit-read-only t)) ;; Allow modification even if buffer is read-only
@@ -706,13 +706,18 @@ ROLE is optional and defaults to nil."
             (goto-char (line-end-position)))
 
           ;; Ensure content is a string before inserting
-          (let ((content (if (stringp content) content "")))
-            (if (equal role "user")
-                (insert (propertize content 'face font-lock-keyword-face))
-              (insert content)
+          (let ((content-str (if (stringp content) content "")))
+            (cond
+             ((equal role "user")
+              (insert (propertize content-str 'face font-lock-keyword-face)))
+             ((equal role "tool_json")
+              ;; Insert JSON content wrapped in an Org source block
+              (insert content-str))
+             (t ;; Default case (e.g., role="llm", "error", "warning")
+              (insert content-str)
               ;; Accumulate LLM output locally for potential use (e.g., copying)
-              (setq-local emigo--llm-output (concat emigo--llm-output content))))
-
+              (when (equal role "llm") ;; Only accumulate LLM's textual response
+                (setq-local emigo--llm-output (concat emigo--llm-output content-str))))))
           ;; History is managed on the Python side
 
           (goto-char (point-max))
@@ -845,21 +850,26 @@ The file path is relative to the session directory."
 
 ;; --- Tool Execution & Interaction Handlers (Called from Python) ---
 
-(defun emigo--request-tool-approval-sync (session-path tool-name params-plist-string)
-  "Ask the user for approval to execute TOOL-NAME with PARAMS-PLIST-STRING.
+(defun emigo--request-tool-approval-sync (session-path tool-name params-json-string)
+  "Ask the user for approval to execute TOOL-NAME with PARAMS-JSON-STRING.
 Return t if approved, nil otherwise. Called synchronously by the agent.
-PARAMS-PLIST-STRING is expected to be a string representation of an elisp plist, e.g. \"(:path \\\"foo.py\\\" :content \\\"bar\\\")\"."
+PARAMS-JSON-STRING is expected to be a JSON string representing the parameters dictionary."
   (interactive) ;; For testing, remove later if only called programmatically
-  (let* ((params (ignore-errors (read params-plist-string)))
-         (param-alist (when (plistp params) (cl-loop for (key val) on params by #'cddr collect (cons key val))))
+  (let* ((param-alist (ignore-errors (json-parse-string params-json-string :object-type 'alist))) ;; Parse JSON string into an alist
          (prompt-message
           (format "[Emigo Approval] Allow tool '%s' for session '%s'?\nParams:\n%s\nApprove? (y or n) "
                   tool-name
                   session-path
-                  (if param-alist
-                      (mapconcat (lambda (pair) (format "- %S: %S" (car pair) (cdr pair))) param-alist "\n")
-                    params-plist-string)))) ;; Show raw string if plist parsing failed
-    (y-or-n-p prompt-message)))
+                  (if (listp param-alist) ;; Check if parsing succeeded and resulted in a list (alist)
+                      (mapconcat (lambda (pair) (format "- %s: %S" (car pair) (cdr pair))) param-alist "\n")
+                    (format "Invalid JSON parameters received: %s" params-json-string))))) ;; Show raw string if JSON parsing failed
+    ;; Only proceed if parsing was successful
+    (if (listp param-alist)
+        (y-or-n-p prompt-message)
+      ;; If parsing failed, display error and deny automatically
+      (message "%s" prompt-message)
+      (ding)
+      nil)))
 
 (defun emigo--ask-user-sync (session-path question options-json-string)
   "Ask the user QUESTION in the context of SESSION-PATH.

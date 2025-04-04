@@ -29,6 +29,17 @@ import json
 import time
 import traceback
 import os
+import re # Import the regular expression module
+
+# Add project root to sys.path to allow importing other modules like llm, agents, utils
+project_root = os.path.dirname(os.path.abspath(__file__))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+import traceback
+import os
+import json # Ensure json is imported
+import time # Ensure time is imported
 
 # Add project root to sys.path to allow importing other modules like llm, agents, utils
 project_root = os.path.dirname(os.path.abspath(__file__))
@@ -38,6 +49,11 @@ if project_root not in sys.path:
 from utils import _filter_environment_details
 from llm import LLMClient
 from agents import Agents
+# Import tool definitions and provider formatting
+from tool_definitions import get_all_tools
+from llm_providers import get_formatted_tools
+# Import constants used for tool results
+from system_prompt import TOOL_DENIED, TOOL_ERROR_PREFIX
 
 # --- Communication Functions ---
 
@@ -61,10 +77,11 @@ def send_message(msg_type, session_path, **kwargs):
         }), flush=True)
 
 
-def request_tool_execution(session_path, tool_name, params):
-    """Sends a tool request and waits for the result from stdin."""
+def request_tool_execution(session_path, tool_name, parameters_dict):
+    """Sends a tool request with structured parameters and waits for the result."""
     request_id = f"tool_{time.time_ns()}" # Unique ID for the request
-    send_message("tool_request", session_path, request_id=request_id, tool_name=tool_name, params=params)
+    # Send the parameters as a dictionary
+    send_message("tool_request", session_path, request_id=request_id, tool_name=tool_name, parameters=parameters_dict)
     # Wait for the corresponding tool_result from stdin
     while True:
         try:
@@ -149,15 +166,9 @@ def handle_interaction_request(request):
     def execute_tool_via_main_process(tool_name, params):
         return request_tool_execution(session_path, tool_name, params)
 
-    # Patch the agent instance's _call_llm_and_stream_response method
-    # to use our communication wrapper.
-    # Note: We are replacing the method on the *instance*, not the class.
-    # This lambda captures the necessary variables (agent, llm_client, stream_to_main_process)
-    agent._call_llm_and_stream_response = lambda messages_to_send: agent_call_llm_wrapper(
-        agent, llm_client, messages_to_send, stream_to_main_process
-    )
     # We don't need to patch tool execution on the agent side anymore,
     # the worker will call request_tool_execution directly.
+    # We also don't need to patch the agent's LLM call method, the worker loop will handle it.
 
     # --- Run the Agent Interaction Loop ---
     # Keep track of history *during* this interaction locally
@@ -181,110 +192,292 @@ def handle_interaction_request(request):
             # 1. Prepare Prompt (Pass the current state of the local interaction_history)
             messages_to_send = agent._prepare_llm_prompt(system_prompt, interaction_history) # Pass the list of dicts
 
-            # 2. Call LLM (streaming happens via our patched method)
-            full_response = None
-            # The llm_client is now stateless regarding history
+            # 2. Call LLM (directly using llm_client)
+            full_response_text = "" # Accumulate the textual response
+            tool_call_fragments = {} # {index: {id:.., type:.., function:{name:.., arguments:...}}}
+            reconstructed_tool_calls = [] # List to store final tool calls for history [{id:.., type:.., function:{name:.., arguments:...}}]
+            llm_error_occurred = False # Flag to track LLM errors
+            llm_stream_exception = None # Store exception if stream fails
+
             try:
-                # Stream the response through our patched method
-                response_stream = llm_client.send(messages_to_send, stream=True)
-                full_response = ""
+                # Get available tools and format them for the provider
+                available_tools = get_all_tools() # From tool_definitions
+                formatted_tools = get_formatted_tools(available_tools, llm_client.model_name) # From llm_providers
+
+                # Prepare arguments for llm_client.send
+                completion_args = {"stream": True}
+                if formatted_tools:
+                    completion_args["tools"] = formatted_tools
+                    completion_args["tool_choice"] = "auto" # Or make configurable if needed
+
+                # Call llm_client directly, enabling streaming and passing tools
+                response_stream = llm_client.send(messages_to_send, **completion_args)
+
+                # Stream text chunks and accumulate tool calls
                 for chunk in response_stream:
-                    stream_to_main_process(str(chunk))
-                    full_response += chunk
+                    # --- Safely access delta ---
+                    delta = None
+                    try:
+                        if chunk and hasattr(chunk, 'choices') and chunk.choices and len(chunk.choices) > 0:
+                             # Access delta safely
+                             if hasattr(chunk.choices[0], 'delta'):
+                                 delta = chunk.choices[0].delta
+                             else:
+                                 # print(f"  - Skipping chunk choice missing 'delta': {chunk.choices[0]}", file=sys.stderr)
+                                 continue # Skip choice if delta is missing
+                        else:
+                            # Log unexpected chunk structure if needed, but don't stop
+                            # print(f"  - Skipping chunk with unexpected structure: {chunk}", file=sys.stderr)
+                            continue # Skip to next chunk
+                    except AttributeError as e:
+                        print(f"  - Error accessing chunk attributes: {e}. Chunk: {chunk}", file=sys.stderr)
+                        continue # Skip malformed chunk
+                    except Exception as e: # Catch other potential errors during access
+                        print(f"  - Unexpected error accessing chunk delta: {e}. Chunk: {chunk}", file=sys.stderr)
+                        continue
+
+                    if not delta:
+                        # print(f"  - Skipping chunk with no delta: {chunk}", file=sys.stderr)
+                        continue # Skip chunk if delta couldn't be accessed
+
+                    # --- Process text content ---
+                    try:
+                        if hasattr(delta, 'content') and delta.content:
+                            content_piece = delta.content
+                            stream_to_main_process(content_piece) # Stream text content
+                            full_response_text += content_piece # Accumulate text
+                    except Exception as e:
+                         print(f"  - Error processing delta.content: {e}. Delta: {delta}", file=sys.stderr)
+                         # Continue processing other parts if possible
+
+                    # --- Process tool calls ---
+                    try:
+                        if hasattr(delta, 'tool_calls') and delta.tool_calls:
+                            for call_chunk in delta.tool_calls:
+                                # --- Safely access tool call chunk attributes ---
+                                index = getattr(call_chunk, 'index', None)
+                                if index is None:
+                                    print(f"  - Skipping tool call chunk missing 'index': {call_chunk}", file=sys.stderr)
+                                    continue
+
+                                # --- Initialize fragment if new ---
+                                if index not in tool_call_fragments:
+                                    tool_id = getattr(call_chunk, 'id', None)
+                                    tool_type = getattr(call_chunk, 'type', 'function') # Default type
+                                    # Safely access function name
+                                    function_obj = getattr(call_chunk, 'function', None)
+                                    func_name = getattr(function_obj, 'name', None) if function_obj else None
+
+                                    if tool_id and func_name: # Require id and function name to initialize
+                                        tool_call_fragments[index] = {
+                                            "id": tool_id,
+                                            "type": tool_type,
+                                            "function": {"name": func_name, "arguments": ""}
+                                        }
+                                        print(f"  - Started tool call fragment {index}: id={tool_id}, name={func_name}", file=sys.stderr)
+                                    else:
+                                        print(f"  - Skipping incomplete tool call chunk (missing id or func name): {call_chunk}", file=sys.stderr)
+                                        continue # Skip if essential init info is missing
+
+                                # --- Append argument chunks ---
+                                # Check if fragment was successfully initialized before appending args
+                                if index in tool_call_fragments:
+                                    # Safely access arguments
+                                    function_obj = getattr(call_chunk, 'function', None)
+                                    arguments_chunk = getattr(function_obj, 'arguments', None) if function_obj else None
+                                    if arguments_chunk:
+                                        tool_call_fragments[index]["function"]["arguments"] += arguments_chunk
+                                        # print(f"  - Appended args to fragment {index}: {arguments_chunk}", file=sys.stderr) # Very verbose
+                    except Exception as e:
+                         print(f"  - Error processing delta.tool_calls: {e}. Delta: {delta}", file=sys.stderr)
+                         # Continue processing other parts if possible
+
             except Exception as e:
-                error_message = f"[Error during LLM communication: {e}]"
-                print(f"\n{error_message}", file=sys.stderr)
-                stream_to_main_process(str(error_message), "error")
+                llm_error_occurred = True # Set flag
+                error_message = f"[Error during LLM communication or streaming: {e}]\n{traceback.format_exc()}"
+                print(f"\n{error_message}", file=sys.stderr) # Print detailed error
+                stream_to_main_process(f"[LLM Error: {e}]", "error") # Send simplified error
                 # Add error to local history for this interaction attempt
-                interaction_history.append({"role": "assistant", "content": error_message})
-                break  # Exit loop on communication error
+                interaction_history.append({"role": "assistant", "content": f"[LLM Error: {e}]"})
+                # No 'break' here, let it proceed to 'finished' message
 
-            # Check if the LLM response was empty or only whitespace
-            if not full_response or not full_response.strip():
-                print("Worker: LLM response was empty or whitespace.", file=sys.stderr)
-                # Add the (empty) response to history before breaking
-                interaction_history.append({"role": "assistant", "content": full_response or ""})
-                # No tool use possible with empty response, break the loop
-                break # Exit loop, interaction ends here
-            else:
-                # Filter and add assistant's non-empty response to the local interaction history
-                filtered_response = _filter_environment_details(full_response)
-                interaction_history.append({"role": "assistant", "content": filtered_response})
+            # 3. Process Response (Parse Tool Calls from accumulated fragments)
+            tool_calls_extracted = [] # List of (tool_call_id, tool_name, parameters_dict)
+            reconstructed_tool_calls = [] # List of {id:.., type:.., function:{name:.., arguments:...}} for history
 
-            # 3. Process Response (Parse Tools) - Only if response was not empty
-            tool_requests = agent._parse_tool_use(full_response) # Returns list of (tool_name, params)
+            if not llm_error_occurred and tool_call_fragments: # Only process tools if no LLM error
+                print(f"Worker: Processing {len(tool_call_fragments)} accumulated tool call fragments.", file=sys.stderr)
+                # Sort fragments by index to process in order
+                sorted_indices = sorted(tool_call_fragments.keys())
 
-            # If no tool requests, the loop will continue. The assistant's previous response
-            # is already added to history. The next turn will proceed with that history.
-            # print("Worker: No tool use found in this turn.", file=sys.stderr) # Optional debug
+                for index in sorted_indices:
+                    fragment = tool_call_fragments[index]
+                    tool_call_id = fragment.get("id")
+                    tool_type = fragment.get("type", "function") # Usually 'function'
+                    func_name = fragment.get("function", {}).get("name")
+                    arguments_str = fragment.get("function", {}).get("arguments", "")
 
-            # 4. Execute Tools (if any)
-            tool_results = []
-            # Only execute if tool_requests is not empty
-            if tool_requests:
-                should_continue_interaction = True
-                for tool_name, params in tool_requests:
-                    # Special handling for completion tool
-                    if tool_name == "attempt_completion":
-                        # result_text = params.get("result", "")
-                        # command = params.get("command", "")
-                        # Send completion message to main process (which signals Emacs)
-                        # The main process handles the "COMPLETION_SIGNALLED" logic now.
-                        # We just need to request the tool execution.
-                        # print(f"Worker: Requesting execution for completion tool", file=sys.stderr)
-                        tool_result = request_tool_execution(session_path, tool_name, params)
-                        tool_results.append(tool_result) # Append the result (e.g., "COMPLETION_SIGNALLED")
-                        should_continue_interaction = False # End interaction after this tool
-                        break # Stop processing further tools in this turn
+                    if not all([tool_call_id, func_name]):
+                        print(f"  - Warning: Skipping incomplete tool call fragment at index {index}: {fragment}", file=sys.stderr)
+                        continue
 
-                    # Execute other tools via main process communication
-                    print(f"Worker: Requesting execution for tool: {tool_name}", file=sys.stderr)
-                    tool_result = request_tool_execution(session_path, tool_name, params)
-                    tool_results.append(tool_result)
+                    # Add the fully reconstructed tool call to the list for history
+                    reconstructed_tool_calls.append({
+                        "id": tool_call_id,
+                        "type": tool_type,
+                        "function": {"name": func_name, "arguments": arguments_str}
+                    })
 
-                    # Check for denial or error that should stop the interaction
-                    # The main process formats these standard strings.
-                    if tool_result == "TOOL_DENIED" or tool_result.startswith("<tool_error>"):
-                        print(f"Worker: Tool denied or failed, ending interaction. Result: {tool_result}", file=sys.stderr)
-                        should_continue_interaction = False
-                        break # Stop processing further tools in this turn
+                    # Try parsing arguments for execution
+                    try:
+                        parameters = json.loads(arguments_str)
+                        if isinstance(parameters, dict):
+                            tool_call_tuple = (tool_call_id, func_name, parameters)
+                            tool_calls_extracted.append(tool_call_tuple)
+                            print(f"  - Parsed tool call {index}: {func_name}({parameters}) (ID: {tool_call_id})", file=sys.stderr)
+                            # --- Send parsed JSON to main process for display ---
+                            try:
+                                tool_call_json_obj = {"tool_name": func_name, "parameters": parameters}
+                                tool_call_json_str = json.dumps(tool_call_json_obj, indent=2)
+                                send_message("stream", session_path, role="tool_json", content=tool_call_json_str)
+                            except Exception as json_err:
+                                print(f"  - Error formatting tool call JSON for streaming: {json_err}", file=sys.stderr)
+                            # --- End send JSON ---
+                        else:
+                            print(f"  - Error: Arguments for tool {func_name} (Index {index}) is not a JSON object: {arguments_str}", file=sys.stderr)
+                            # Don't add to tool_calls_extracted if params are invalid
+                    except json.JSONDecodeError as json_decode_err:
+                        print(f"  - Error: Failed to decode JSON arguments for tool {func_name} (Index {index}). Error: {json_decode_err}. Arguments received:\n{arguments_str}", file=sys.stderr)
+                        # Don't add to tool_calls_extracted if params are invalid
+                    except Exception as parse_err:
+                        print(f"  - Error: Unexpected error parsing arguments for tool {func_name} (Index {index}): {parse_err}", file=sys.stderr)
+                        # Don't add to tool_calls_extracted on other errors
 
-                # 5. Add Tool Results to History (only if tools were executed)
-                if tool_results:
-                    # Filter out the special completion marker if present
-                    llm_tool_results = [res for res in tool_results if res != "COMPLETION_SIGNALLED"]
-                    combined_tool_result = "\n\n".join(llm_tool_results)
-                    # Filter and add tool results to the local interaction history using the 'system' role (or 'tool')
-                    filtered_tool_result = _filter_environment_details(combined_tool_result)
-                    interaction_history.append({"role": "system", "content": filtered_tool_result})
-
-                # 6. Check if loop should break
-                if not should_continue_interaction:
-                    print("Worker: Ending interaction due to completion, denial, or error.", file=sys.stderr)
-                    break # Exit the turn loop
-                # If we executed tools successfully and should continue, proceed to fetch env details
+            # Add the assistant message to history *before* executing tools
+            # Include reconstructed tool calls if any were generated
+            if not llm_error_occurred:
+                assistant_message = {"role": "assistant"}
+                filtered_response_text = _filter_environment_details(full_response_text.strip())
+                # Add content only if it's non-empty after filtering
+                if filtered_response_text:
+                    assistant_message["content"] = filtered_response_text
                 else:
-                     # 7. Fetch updated environment details ONLY if continuing to the next turn
+                    # Per OpenAI spec, content is null if only tool_calls are present
+                    assistant_message["content"] = None # Explicitly null
+
+                # Add tool_calls structure if tools were generated
+                if reconstructed_tool_calls:
+                    assistant_message["tool_calls"] = reconstructed_tool_calls
+
+                # Add message to history only if it has content OR tool calls
+                if assistant_message.get("content") or assistant_message.get("tool_calls"):
+                    interaction_history.append(assistant_message)
+                elif not tool_call_fragments: # If no text AND no tool fragments, add empty assistant message (content="")
+                     interaction_history.append({"role": "assistant", "content": ""})
+
+
+            # 4. Execute Tools (if any calls were successfully *parsed* and no LLM error)
+            should_continue_interaction = True # Assume continuation unless tool signals otherwise
+            # Add logging before the check
+            print(f"Worker: Checking tool execution. LLM Error: {llm_error_occurred}. Parsed Tool Calls: {len(tool_calls_extracted)}. Reconstructed Tool Calls: {len(reconstructed_tool_calls)}", file=sys.stderr)
+
+            if not llm_error_occurred and tool_calls_extracted:
+                tool_results_for_history = [] # Store results for history (role='tool')
+
+                for tool_call_id, tool_name, parameters_dict in tool_calls_extracted:
+                    print(f"Worker: Requesting execution for tool: {tool_name} (ID: {tool_call_id})", file=sys.stderr)
+                    # Pass the already parsed dictionary
+                    tool_result_str = request_tool_execution(session_path, tool_name, parameters_dict)
+
+                    # --- Check raw tool_result_str for signals BEFORE filtering ---
+                    if tool_result_str == "COMPLETION_SIGNALLED":
+                        print(f"Worker: Completion signalled by tool {tool_name}. Ending interaction.", file=sys.stderr)
+                        should_continue_interaction = False
+                        # Add the signalling result to history before breaking
+                        tool_results_for_history.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call_id,
+                            "content": tool_result_str # Keep original signal
+                        })
+                        break # Stop processing further tools
+                    elif tool_result_str == TOOL_DENIED: # Use constant
+                        print(f"Worker: Tool {tool_name} denied by user. Ending interaction.", file=sys.stderr)
+                        should_continue_interaction = False
+                        # Add the denial result to history before breaking
+                        tool_results_for_history.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call_id,
+                            "content": tool_result_str # Keep original signal
+                        })
+                        break # Stop processing further tools
+                    elif tool_result_str.startswith(TOOL_ERROR_PREFIX): # Use constant
+                        print(f"Worker: Tool {tool_name} failed. Ending interaction. Result: {tool_result_str}", file=sys.stderr)
+                        should_continue_interaction = False
+                         # Add the error result to history before breaking
+                        tool_results_for_history.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call_id,
+                            "content": tool_result_str # Keep original error
+                        })
+                        break # Stop processing further tools
+
+                    # --- If no signal, filter and prepare result for history ---
+                    filtered_tool_result = _filter_environment_details(tool_result_str)
+                    tool_results_for_history.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call_id, # Link result to the specific tool call
+                        "content": filtered_tool_result # Use filtered result content for history
+                    })
+
+                # 5. Add Tool Results to History (potentially including signal messages)
+                if tool_results_for_history:
+                    interaction_history.extend(tool_results_for_history)
+
+                # 6. Check if loop should break based on tool results
+                if not should_continue_interaction:
+                    print("Worker: Ending interaction loop due to tool result (completion, denial, error).", file=sys.stderr)
+                    break # Exit the turn loop
+
+                # 7. Fetch updated environment details ONLY if continuing
+                if should_continue_interaction: # Check flag before fetching
                     print("Worker: Requesting updated environment details for next turn...", file=sys.stderr)
                     updated_env_details = request_environment_details(session_path)
-                    agent.environment_details_str = updated_env_details # Update agent's state for _prepare_llm_prompt
+                    agent.environment_details_str = updated_env_details # Update agent's state
                     print("Worker: Updated environment details received.", file=sys.stderr)
-            else:
-                # No tools were requested in this turn, interaction ends here.
-                print("Worker: No tool use found, ending interaction.", file=sys.stderr)
+
+            # Check if interaction should end because no *parsed* tools were called
+            # or if an LLM error occurred.
+            elif not llm_error_occurred and not tool_calls_extracted:
+                # This condition is met if:
+                # - LLM produced no tool_call fragments OR
+                # - LLM produced fragments, but they failed parsing (JSON error, etc.)
+                print("Worker: No valid tool calls parsed or executed in this turn, ending interaction.", file=sys.stderr)
                 break # Exit the turn loop
+            elif llm_error_occurred: # LLM error occurred
+                print("Worker: Ending interaction loop due to LLM communication error.", file=sys.stderr)
+                break # Exit loop
 
 
         # --- End of Turn Loop ---
 
         # Signal interaction finished
-        status = "success" if turn < max_turns - 1 else "max_turns_reached"
+        # Determine status based on whether an LLM error occurred or max turns were reached
+        if llm_error_occurred:
+            status = "llm_error"
+            finish_message = "Interaction ended due to LLM communication error."
+        elif turn >= max_turns - 1: # Check if loop finished due to max_turns
+            status = "max_turns_reached"
+            finish_message = f"Interaction ended after reaching max {max_turns} turns."
+        else: # Loop finished normally (no tool calls, completion, denial, or tool error)
+            status = "success"
+            finish_message = f"Interaction ended after {turn + 1} turns."
+
         finish_data = {
             "status": status,
-            "message": f"Interaction ended after {turn+1} turns."
+            "message": finish_message
         }
-        # Include the final history state if successful
-        if status in ["success", "max_turns_reached"]:
+        # Include the final history state unless there was an LLM error
+        if status != "llm_error":
             finish_data["final_history"] = interaction_history # Send back the list of dicts
 
         send_message("finished", session_path, **finish_data)
@@ -293,25 +486,11 @@ def handle_interaction_request(request):
         tb_str = traceback.format_exc()
         error_msg = f"Critical error in agent interaction loop: {e}\n{tb_str}"
         print(error_msg, file=sys.stderr)
-        stream_to_main_process(f"[Agent Critical Error: {e}]", "error")
-        send_message("finished", session_path, status="error", message=error_msg)
-
-
-# Helper function to call LLM and stream response
-def agent_call_llm_wrapper(agent, llm_client, messages_to_send, stream_callback):
-    """Wrapper for agent's _call_llm_and_stream_response that uses our stream callback."""
-    full_response = ""
-    try:
-        # Send the temporary list with context included
-        response_stream = llm_client.send(messages_to_send, stream=True)
-        for chunk in response_stream:
-            stream_callback(str(chunk))
-            full_response += chunk
-    except Exception as e:
-        error_msg = f"[LLM Communication Error: {str(e)}]"
-        stream_callback(error_msg)
-        full_response = error_msg
-    return full_response
+        # Ensure session_path is valid before sending messages
+        valid_session_path = session_path or "unknown_session"
+        # Use send_message for consistency
+        send_message("stream", valid_session_path, role="error", content=f"[Agent Critical Error: {e}]")
+        send_message("finished", valid_session_path, status="critical_error", message=error_msg)
 
 
 # --- Main Worker Loop ---

@@ -34,7 +34,7 @@ interface for standalone usage and debugging.
 #
 # Default Behavior (LLM Context):
 # By default, the script performs a ranking algorithm (PageRank) based on code
-# dependencies and context provided via command-line arguments (--chat-files,
+# dependencies and context provided via command-line parameters (--chat-files,
 # --mentioned-files, --mentioned-idents). It then selects the most relevant
 # code definitions and files, formats them into snippets using tree-sitter,
 # and prunes the result to fit within a specified token limit (--map-tokens).

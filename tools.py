@@ -29,7 +29,7 @@ import json
 import re
 import traceback
 import difflib
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any # Add Any
 
 # Import Session class for type hinting and accessing session state
 from session import Session
@@ -62,9 +62,9 @@ def _posix_path(path: str) -> str:
 
 # --- Tool Implementations ---
 
-def execute_command(session: Session, params: Dict[str, str]) -> str:
+def execute_command(session: Session, parameters: Dict[str, Any]) -> str:
     """Executes a shell command via Emacs."""
-    command = params.get("command")
+    command = parameters.get("command")
     if not command:
         return _format_tool_error("Missing required parameter 'command'")
 
@@ -77,9 +77,9 @@ def execute_command(session: Session, params: Dict[str, str]) -> str:
         print(f"Error executing command '{command}' via Emacs: {e}", file=sys.stderr)
         return _format_tool_error(f"Error executing command: {e}")
 
-def read_file(session: Session, params: Dict[str, str]) -> str:
+def read_file(session: Session, parameters: Dict[str, Any]) -> str:
     """Reads a file, adds it to context, and updates the session cache."""
-    rel_path = params.get("path")
+    rel_path = parameters.get("path")
     if not rel_path:
         return _format_tool_error("Missing required parameter 'path'")
 
@@ -109,13 +109,13 @@ def read_file(session: Session, params: Dict[str, str]) -> str:
         session.invalidate_cache(rel_path) # Invalidate cache on error
         return _format_tool_error(f"Error reading file: {e}")
 
-def write_to_file(session: Session, params: Dict[str, str]) -> str:
+def write_to_file(session: Session, parameters: Dict[str, Any]) -> str:
     """Writes content to a file and updates the session cache."""
-    rel_path = params.get("path")
-    content = params.get("content")
+    rel_path = parameters.get("path")
+    content = parameters.get("content") # Use get for content as well
     if not rel_path:
         return _format_tool_error("Missing required parameter 'path'")
-    if content is None: # Allow empty string content
+    if content is None: # Check if content is None (missing)
         return _format_tool_error("Missing required parameter 'content'")
 
     abs_path = _resolve_path(session.session_path, rel_path)
@@ -188,10 +188,10 @@ def _parse_search_replace_blocks(diff_str: str) -> Tuple[List[Tuple[str, str]], 
     return blocks, None
 
 
-def replace_in_file(session: Session, params: Dict[str, str]) -> str:
+def replace_in_file(session: Session, parameters: Dict[str, str]) -> str:
     """Replaces content in a file using SEARCH/REPLACE blocks via Emacs."""
-    rel_path = params.get("path")
-    diff_str = params.get("diff")
+    rel_path = parameters.get("path")
+    diff_str = parameters.get("diff")
     similarity_threshold = 0.85 # Configurable threshold (85%)
 
     if not rel_path:
@@ -362,28 +362,29 @@ def replace_in_file(session: Session, params: Dict[str, str]) -> str:
         return _format_tool_error(f"Error processing replacement for {posix_rel_path}: {e}")
 
 
-def ask_followup_question(session: Session, params: Dict[str, str]) -> str:
+def ask_followup_question(session: Session, parameters: Dict[str, Any]) -> str:
     """Asks the user a question via Emacs."""
-    question = params.get("question")
-    options_str = params.get("options") # Optional: "[Option1, Option2]" as JSON string
+    question = parameters.get("question")
+    # Options should be a list of strings from the parsed JSON parameters
+    options_list = parameters.get("options")
+
     if not question:
         return _format_tool_error("Missing required parameter 'question'")
 
     try:
-        # Validate and prepare options JSON string
-        valid_options_str = "[]"
-        if options_str:
-            try:
-                parsed_options = json.loads(options_str)
-                if isinstance(parsed_options, list):
-                    valid_options_str = options_str # Use original if valid list
-                else:
-                    print(f"Warning: Invalid format for options, expected JSON array string: {options_str}", file=sys.stderr)
-            except json.JSONDecodeError:
-                print(f"Warning: Invalid JSON for options: {options_str}", file=sys.stderr)
+        # Validate options_list and convert to JSON string for Elisp
+        options_json_str = "[]"
+        if isinstance(options_list, list) and all(isinstance(opt, str) for opt in options_list):
+            # Ensure 2-5 options as per original prompt description (optional check)
+            if 2 <= len(options_list) <= 5:
+                 options_json_str = json.dumps(options_list)
+            else:
+                 print(f"Warning: Received {len(options_list)} options, expected 2-5. Sending empty options.", file=sys.stderr)
+        elif options_list is not None: # If options provided but not a list of strings
+             print(f"Warning: Invalid format for options, expected list of strings: {options_list}. Sending empty options.", file=sys.stderr)
 
         # Ask Emacs to present the question and get the user's answer (synchronous)
-        answer = get_emacs_func_result("ask-user-sync", session.session_path, question, valid_options_str)
+        answer = get_emacs_func_result("ask-user-sync", session.session_path, question, options_json_str)
 
         if answer is None or answer == "": # Check for nil or empty string from Emacs
             # User likely cancelled or provided no input
@@ -396,12 +397,12 @@ def ask_followup_question(session: Session, params: Dict[str, str]) -> str:
         print(f"Error asking followup question via Emacs: {e}", file=sys.stderr)
         return _format_tool_error(f"Error asking question: {e}")
 
-def attempt_completion(session: Session, params: Dict[str, str]) -> str:
+def attempt_completion(session: Session, parameters: Dict[str, Any]) -> str:
     """Signals completion to Emacs."""
-    result_text = params.get("result")
-    command = params.get("command") # Optional command to demonstrate
+    result_text = parameters.get("result")
+    command = parameters.get("command") # Optional command to demonstrate
 
-    if result_text is None: # Allow empty string result
+    if result_text is None: # Check if result is missing
         return _format_tool_error("Missing required parameter 'result'")
 
     try:
@@ -414,8 +415,9 @@ def attempt_completion(session: Session, params: Dict[str, str]) -> str:
         print(f"Error signalling completion to Emacs: {e}", file=sys.stderr)
         return _format_tool_error(f"Error signalling completion: {e}")
 
-def list_repomap(session: Session, params: Dict[str, str]) -> str:
-    """Generates and caches the repository map."""
+def list_repomap(session: Session, parameters: Dict[str, Any]) -> str:
+    """Generates and caches the repository map. Ignores parameters."""
+    # This tool takes no parameters, so 'parameters' dict is ignored.
     try:
         chat_files = session.get_chat_files()
         print(f"Generating repomap for {session.session_path} with chat files: {chat_files}", file=sys.stderr)
@@ -434,10 +436,14 @@ def list_repomap(session: Session, params: Dict[str, str]) -> str:
         session.set_last_repomap(None) # Clear stored map on error
         return _format_tool_error(f"Error generating repository map: {e}")
 
-def list_files(session: Session, params: Dict[str, str]) -> str:
+def list_files(session: Session, parameters: Dict[str, Any]) -> str:
     """Lists files in a directory via Emacs."""
-    rel_path = params.get("path", ".") # Default to session path root
-    recursive = params.get("recursive", "false").lower() == "true"
+    rel_path = parameters.get("path", ".") # Default to session path root
+    recursive = parameters.get("recursive", False) # Default to False if missing or not bool
+
+    # Ensure recursive is boolean
+    if not isinstance(recursive, bool):
+        recursive = str(recursive).lower() == "true"
 
     abs_path = _resolve_path(session.session_path, rel_path)
     posix_rel_path = _posix_path(rel_path)
@@ -453,16 +459,26 @@ def list_files(session: Session, params: Dict[str, str]) -> str:
         print(f"Error listing files via Emacs: {e}", file=sys.stderr)
         return _format_tool_error(f"Error listing files: {e}")
 
-def search_files(session: Session, params: Dict[str, str]) -> str:
+def search_files(session: Session, parameters: Dict[str, Any]) -> str:
     """Searches files using Emacs's capabilities."""
-    rel_path = params.get("path", ".")
-    pattern = params.get("pattern")
-    case_sensitive = params.get("case_sensitive", "false").lower() == "true"
-    # Use a slightly larger default, capped reasonably
-    max_matches = min(200, int(params.get("max_matches", "50")))
+    rel_path = parameters.get("path", ".")
+    pattern = parameters.get("pattern")
+    case_sensitive = parameters.get("case_sensitive", False) # Default to False
+    max_matches_arg = parameters.get("max_matches", 50) # Default to 50
 
     if not pattern:
-        return _format_tool_error("Missing 'pattern' parameter.")
+        return _format_tool_error("Missing required parameter 'pattern'")
+
+    # Validate/sanitize max_matches
+    try:
+        max_matches = min(200, int(max_matches_arg)) # Cap at 200
+        if max_matches <= 0: max_matches = 50 # Ensure positive, default 50
+    except (ValueError, TypeError):
+        max_matches = 50 # Default if conversion fails
+
+    # Ensure case_sensitive is boolean
+    if not isinstance(case_sensitive, bool):
+        case_sensitive = str(case_sensitive).lower() == "true"
 
     abs_path = _resolve_path(session.session_path, rel_path)
     posix_rel_path = _posix_path(rel_path)
@@ -484,33 +500,3 @@ def search_files(session: Session, params: Dict[str, str]) -> str:
     except Exception as e:
         print(f"Error searching files via Emacs: {e}\n{traceback.format_exc()}", file=sys.stderr)
         return _format_tool_error(f"Error searching files: {e}")
-
-# --- Tool Dispatcher ---
-
-# Map tool names (from system_prompt.py) to implementation functions
-TOOL_HANDLER_MAP = {
-    "execute_command": execute_command,
-    "read_file": read_file,
-    "write_to_file": write_to_file,
-    "replace_in_file": replace_in_file,
-    "ask_followup_question": ask_followup_question,
-    "attempt_completion": attempt_completion,
-    "list_repomap": list_repomap,
-    "list_files": list_files,
-    "search_files": search_files,
-}
-
-def dispatch_tool(session: Session, tool_name: str, params: Dict[str, str]) -> str:
-    """Finds and calls the appropriate tool implementation."""
-    handler = TOOL_HANDLER_MAP.get(tool_name)
-    if not handler:
-        print(f"Unknown tool requested: {tool_name}", file=sys.stderr)
-        return _format_tool_error(f"Unknown tool: {tool_name}")
-
-    try:
-        # Call the handler function, passing the session object and params
-        return handler(session, params)
-    except Exception as e:
-        # Catch errors within the handler itself
-        print(f"Error during execution of tool '{tool_name}': {e}\n{traceback.format_exc()}", file=sys.stderr)
-        return _format_tool_error(f"Error executing tool '{tool_name}': {e}")

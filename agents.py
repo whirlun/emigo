@@ -16,12 +16,13 @@ from typing import List, Dict, Optional, Tuple
 
 from llm import LLMClient
 from repomapper import RepoMapper # Keep for agent's internal use if needed (e.g., environment details)
-from system_prompt import (
-    MAIN_SYSTEM_PROMPT, TOOL_EXECUTE_COMMAND, TOOL_READ_FILE, TOOL_WRITE_TO_FILE,
-    TOOL_REPLACE_IN_FILE, TOOL_SEARCH_FILES, TOOL_LIST_FILES,
-    TOOL_LIST_REPOMAP, TOOL_ASK_FOLLOWUP_QUESTION, TOOL_ATTEMPT_COMPLETION
-)
-import tiktoken # For token counting in history truncation
+# Import tool definitions and provider formatting
+from tool_definitions import get_all_tools
+from llm_providers import get_formatted_tools
+# Import only the base system prompt template
+from system_prompt import MAIN_SYSTEM_PROMPT
+import tiktoken # For token counting
+import json # For formatting tool list
 
 from utils import (
     get_os_name,
@@ -73,69 +74,35 @@ class Agents:
             print(f"Warning: Could not initialize tokenizer. Using simple character count fallback. Error: {e}", file=sys.stderr)
             self.tokenizer = None
 
-    # --- Environment Details & Prompt Building ---
+    # --- Prompt Building ---
 
     def _build_system_prompt(self) -> str:
-        """Builds the system prompt, inserting dynamic info."""
+        """Builds the system prompt, inserting dynamic info and formatted tool list."""
         session_dir = self.session_path
         os_name = get_os_name()
-        # Assuming get_emacs_var can fetch shell and homedir if needed
-        shell = "/bin/bash" # Default shell
+        shell = "/bin/bash" # Default shell - TODO: Get from Emacs?
         homedir = os.path.expanduser("~")
 
-        # Use .format() for clarity
+        # Get all tool definitions
+        available_tools = get_all_tools()
+        # Format tools for the specific LLM provider (e.g., OpenAI)
+        # Assumes llm_client has model_name attribute
+        formatted_tools = get_formatted_tools(available_tools, self.llm_client.model_name)
+        # Convert the formatted list to a JSON string for insertion
+        tools_json_string = json.dumps(formatted_tools, indent=2)
+
+        # Use .format() on the MAIN_SYSTEM_PROMPT template
         prompt = MAIN_SYSTEM_PROMPT.format(
-            session_dir=session_dir.replace(os.sep, '/'), # Ensure POSIX paths for prompt consistency
+            session_dir=session_dir.replace(os.sep, '/'), # Ensure POSIX paths
             os_name=os_name,
             shell=shell,
-            homedir=homedir.replace(os.sep, '/')
+            homedir=homedir.replace(os.sep, '/'),
+            tools_json=tools_json_string # Insert the formatted tool definitions
         )
-        return prompt # Add the missing return statement
-
-    def _parse_tool_use(self, response_text: str) -> List[Tuple[str, Dict[str, str]]]:
-        """Parses the LLM response XML for *all* valid tool *requests*, ignoring thinking tags.
-
-        Returns:
-            A list of tuples, where each tuple is (tool_name, params_dict).
-            Returns an empty list if no known tools are found.
-        """
-        parsed_tools = []
-        try:
-            # 1. Define known tools
-            known_tools = {
-                TOOL_EXECUTE_COMMAND, TOOL_READ_FILE, TOOL_WRITE_TO_FILE,
-                TOOL_REPLACE_IN_FILE, TOOL_SEARCH_FILES, TOOL_LIST_FILES,
-                TOOL_LIST_REPOMAP, TOOL_ASK_FOLLOWUP_QUESTION,
-                TOOL_ATTEMPT_COMPLETION
-            }
-
-            # 2. Find *all* potential top-level XML-like blocks
-            # Regex looks for <tag>content</tag> structure
-            potential_blocks = re.findall(r"<([a-zA-Z0-9_]+)(?:\s+[^>]*)?>(.*?)</\1>", response_text, re.DOTALL)
-
-            # 3. Iterate through blocks to find *all* known tools
-            for tool_name, tool_content in potential_blocks:
-                if tool_name in known_tools:
-                    # Found a known tool, parse its parameters
-                    params = {}
-                    param_matches = re.findall(r"<([a-zA-Z0-9_]+)>(.*?)</\1>", tool_content, re.DOTALL)
-                    for param_name, param_value in param_matches:
-                        params[param_name] = param_value.strip() # Strip whitespace
-
-                    print(f"Parsed tool use: {tool_name} with params: {params}", file=sys.stderr)
-                    parsed_tools.append((tool_name, params))
-                    # else: Ignore non-tool blocks like <thinking>
-
-            # 4. Return the list of found tools (could be empty)
-            if not parsed_tools:
-                print("No known tool use found in the response.", file=sys.stderr)
-            return parsed_tools
-
-        except Exception as e:
-            print(f"Error parsing tool use: {e}\nText: {response_text}", file=sys.stderr)
-            return [] # Return empty list on error
+        return prompt
 
     # --- LLM Prompt Preparation & History Management ---
+    # _parse_tool_use (XML parser) is removed. Parsing now happens in llm_worker.py
 
     def _prepare_llm_prompt(self, system_prompt: str, current_interaction_history: List[Dict]) -> List[Dict]:
         """Prepares the list of messages for the LLM, including history truncation and environment details.

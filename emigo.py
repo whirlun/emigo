@@ -67,7 +67,12 @@ from utils import (
 )
 from session import Session
 # Import tool dispatcher
+# Import tool definitions and dispatcher
 import tools
+from tool_definitions import get_tool
+# Import json for displaying parameters during approval
+import json
+from typing import Dict, List, Optional, Tuple, Any # Add Any
 
 class Emigo:
     def __init__(self, args):
@@ -75,7 +80,7 @@ class Emigo:
         # Init EPC client port.
         print(f"Emigo __init__: Received args: {args}", file=sys.stderr, flush=True) # DEBUG + flush
         if not args:
-            print("Emigo __init__: ERROR - No arguments received (expected EPC port). Exiting.", file=sys.stderr, flush=True)
+            print("Emigo __init__: ERROR - No parameters received (expected EPC port). Exiting.", file=sys.stderr, flush=True)
             sys.exit(1)
         try:
             elisp_epc_port = int(args[0])
@@ -384,22 +389,22 @@ class Emigo:
                     # Ensure content is never None, default to empty string, and filter it
                     content = message.get("content") or ""
                     filtered_content = _filter_environment_details(content)
-                    # Only flush if there's content *after* filtering
-                    if filtered_content:
+                    if role == "tool_json":
+                        # Don't filter JSON content, pass it directly
+                        eval_in_emacs("emigo--flush-buffer", session_path, content, role)
+                    elif filtered_content: # For other roles, flush only if content remains after filtering
                         eval_in_emacs("emigo--flush-buffer", session_path, filtered_content, role)
-                    # History is updated via the 'finished' message
+                    # History is updated via the 'finished' message for regular assistant/user roles
 
                 elif msg_type == "tool_request":
                     request_id = message.get("request_id")
                     tool_name = message.get("tool_name")
-                    params = message.get("params")
-                    if request_id and tool_name and params is not None:
+                    parameters_dict = message.get("parameters") # Expect 'parameters' dict now
+                    if request_id and tool_name and isinstance(parameters_dict, dict):
                         # Store request data before executing
                         self.pending_tool_requests[request_id] = message
-                        # Execute the tool (this might block if sync Emacs calls are needed)
-                        # Run tool execution in a separate thread to avoid blocking queue processing?
-                        # For now, run directly. If Emacs calls block too long, reconsider.
-                        tool_result = self._handle_tool_request_from_worker(session_path, tool_name, params)
+                        # Execute the tool
+                        tool_result = self._handle_tool_request_from_worker(session_path, tool_name, parameters_dict)
                         # Send result back to worker
                         self._send_to_worker({
                             "type": "tool_result",
@@ -479,45 +484,59 @@ class Emigo:
             except Exception as e:
                 print(f"Error processing worker queue message: {e}\n{traceback.format_exc()}", file=sys.stderr)
 
-    def _handle_tool_request_from_worker(self, session_path: str, tool_name: str, params: Dict[str, str]) -> str:
-        """Handles tool execution requested by the worker process by dispatching to tools.py."""
-        print(f"Handling tool request from worker: {tool_name} for {session_path}", file=sys.stderr)
+    def _handle_tool_request_from_worker(self, session_path: str, tool_name: str, parameters: Dict[str, Any]) -> str:
+        """Handles tool execution requested by the worker process."""
+        print(f"Handling tool request from worker: {tool_name} for {session_path} with args: {parameters}", file=sys.stderr)
 
         # Get the session object
         session = self._get_or_create_session(session_path)
         if not session:
-            return tools._format_tool_error(f"Could not find or create session for path: {session_path}") # Use tool's formatter
+            return tools._format_tool_error(f"Could not find or create session for path: {session_path}")
+
+        # Get the tool definition from the registry
+        tool_definition = get_tool(tool_name)
+        if not tool_definition:
+            return tools._format_tool_error(f"Unknown tool requested: {tool_name}")
 
         # Define tools that require explicit approval from Emacs
-        # Read, List, Search, ListRepomap are generally safe. Ask/Attempt interact directly.
-        # Read, List, Search are generally safe. Ask/Attempt interact directly.
-        # Replace approval might be handled within Elisp if needed, but let's require it here for safety.
         require_approval_list = [
             TOOL_EXECUTE_COMMAND,
             TOOL_WRITE_TO_FILE,
+            # Add other tools needing approval if necessary
         ]
 
         # --- Request Approval from Emacs (Synchronous) ---
         if tool_name in require_approval_list:
             try:
-                # Convert params dict to a plist string for Elisp
-                # Use json.dumps for robust value representation
-                params_plist_str = "(" + " ".join([f":{k} {json.dumps(v)}" for k, v in params.items()]) + ")"
-                print(f"Requesting approval for {tool_name} with params: {params_plist_str}", file=sys.stderr) # Debug
-                is_approved = get_emacs_func_result("request-tool-approval-sync", session_path, tool_name, params_plist_str)
+                # Display parameters as JSON string for approval prompt
+                # Use ensure_ascii=False for better unicode display in Emacs if needed
+                args_display_str = json.dumps(parameters, indent=2, ensure_ascii=False)
+                print(f"Requesting approval for {tool_name} with args:\n{args_display_str}", file=sys.stderr)
+                # Pass the JSON string representation to Elisp
+                is_approved = get_emacs_func_result("request-tool-approval-sync", session_path, tool_name, args_display_str)
 
                 if not is_approved: # Emacs function should return t or nil
                     print(f"Tool use denied by user: {tool_name}", file=sys.stderr)
-                    # Return the standard denial message for the worker to handle
                     return TOOL_DENIED
             except Exception as e:
                 print(f"Error requesting tool approval from Emacs: {e}\n{traceback.format_exc()}", file=sys.stderr)
-                return self._format_tool_error(f"Error requesting tool approval: {e}")
+                # Use the tool's error formatter
+                return tools._format_tool_error(f"Error requesting tool approval: {e}")
+
+        # --- (Optional) Schema Validation ---
+        # Add validation logic here if desired, using jsonschema or Pydantic
+        # based on tool_definition['parameters']
 
         # --- Execute Approved Tool ---
         print(f"Dispatching approved tool: {tool_name}", file=sys.stderr)
-        # Call the dispatcher in tools.py, passing the session object
-        tool_result = tools.dispatch_tool(session, tool_name, params)
+        tool_function = tool_definition['function']
+        try:
+            # Pass the parameters dictionary directly to the tool function
+            tool_result = tool_function(session, parameters)
+        except Exception as e:
+            # Catch errors within the tool function itself
+            print(f"Error during execution of tool '{tool_name}': {e}\n{traceback.format_exc()}", file=sys.stderr)
+            return tools._format_tool_error(f"Error executing tool '{tool_name}': {e}")
 
         # --- Clear Active Session on Completion ---
         # If the completion tool was called successfully, clear the active session flag *now*
