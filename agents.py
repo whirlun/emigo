@@ -154,49 +154,6 @@ class Agents:
         last_message_copy["content"] += f"\n\n{self.environment_details_str}" # Append stored details
         messages_to_send[-1] = last_message_copy # Replace the last message
 
-        # --- Verbose Logging (Moved from LLMClient) ---
-        if self.verbose:
-            print("\n--- Sending to LLM ---", file=sys.stderr)
-            # Avoid printing potentially large base64 images in verbose mode
-            printable_messages = []
-            for msg in messages_to_send:
-                if isinstance(msg.get("content"), list): # Handle image messages
-                    new_content = []
-                    for item in msg["content"]:
-                        if isinstance(item, dict) and item.get("type") == "image_url":
-                            # Truncate base64 data for printing
-                             img_url = item.get("image_url", {}).get("url", "")
-                             if isinstance(img_url, str) and img_url.startswith("data:"):
-                                 new_content.append({"type": "image_url", "image_url": {"url": img_url[:50] + "..."}})
-                             else:
-                                 new_content.append(item) # Keep non-base64 or non-string URLs
-                        else:
-                            new_content.append(item)
-                            printable_messages.append({"role": msg["role"], "content": new_content})
-                else:
-                    printable_messages.append(msg)
-
-            # Calculate approximate token count using self.tokenizer
-            token_count_str = ""
-            if self.tokenizer: # Check if tokenizer exists
-                try:
-                    # Use litellm's utility if available, otherwise manual count
-                    # Note: Need to access litellm via self.llm_client or import it here
-                    # For simplicity, let's use the manual count with self.tokenizer
-                    count = 0
-                    for msg in messages_to_send:
-                        # Use json.dumps for consistent counting of structure
-                         count += self._count_tokens(json.dumps(msg))
-                         token_count_str = f" (estimated {count} tokens)"
-                except Exception as e:
-                    token_count_str = f" (token count error: {e})"
-            else:
-                token_count_str = " (tokenizer unavailable for count)"
-
-
-            print(json.dumps(printable_messages, indent=2), file=sys.stderr)
-            print(f"--- End LLM Request{token_count_str} ---", file=sys.stderr)
-
         return messages_to_send
 
     def _call_llm_and_stream_response(self, messages_to_send: List[Dict]) -> Optional[str]:

@@ -34,7 +34,7 @@ from typing import Dict, List, Tuple, Optional
 # Import Session class for type hinting and accessing session state
 from session import Session
 # Import utilities for calling Emacs and file reading
-from utils import get_emacs_func_result, eval_in_emacs, read_file_content
+from utils import get_emacs_func_result, eval_in_emacs, read_file_content, get_emacs_var
 # Import system prompt constants for standard messages/prefixes
 from system_prompt import (
     TOOL_RESULT_SUCCESS, TOOL_RESULT_OUTPUT_PREFIX,
@@ -227,72 +227,88 @@ def replace_in_file(session: Session, params: Dict[str, str]) -> str:
         if not parsed_blocks:
             return _format_tool_error("No valid SEARCH/REPLACE blocks found in the diff.")
 
-        # --- Fuzzy Match Each Block Against Original Content ---
-        file_lines = file_content.splitlines(keepends=True) # Keep endings for context snippets
+        # --- Sequential Line-by-Line Matching Logic ---
+        file_lines = file_content.splitlines(keepends=True) # Keep endings for accurate line numbers
         replacements_to_apply = [] # List of (start_line, elisp_end_line, replace_text)
         errors = []
-        context_lines = 3 # For error reporting
+        already_matched_file_line_indices = set() # Track file lines used in successful matches
 
-        for i, (search_text, replace_text) in enumerate(parsed_blocks):
-            if not search_text: # Cannot match empty string
-                errors.append(f"Block {i+1}: SEARCH block is empty.")
-                continue # Skip this block
+        def _compare_stripped_lines(line1: str, line2: str) -> float:
+            """Compares two lines after stripping whitespace and returns similarity ratio."""
+            stripped1 = line1.strip()
+            stripped2 = line2.strip()
+            if not stripped1 and not stripped2: # Both are whitespace/empty
+                return 1.0
+            if not stripped1 or not stripped2: # One is whitespace/empty, the other isn't
+                return 0.0
+            # Use SequenceMatcher for similarity ratio on stripped lines
+            return difflib.SequenceMatcher(None, stripped1, stripped2).ratio()
 
-            # Match directly against the full file content string
-            matcher = difflib.SequenceMatcher(None, file_content, search_text, autojunk=False)
-            match = matcher.find_longest_match(0, len(file_content), 0, len(search_text))
+        # Iterate through each SEARCH/REPLACE block provided
+        for block_index, (search_text, replace_text) in enumerate(parsed_blocks):
+            search_lines = search_text.splitlines(keepends=True)
+            if not search_lines or not search_text.strip():
+                errors.append(f"Block {block_index+1}: SEARCH block is empty or contains only whitespace.")
+                continue
 
-            # Calculate similarity ratio based on the text match
-            # Use match.size and len(search_text) for a direct ratio of the longest common subsequence
-            match_ratio = 0.0
-            if len(search_text) > 0: # Avoid division by zero
-                # Ratio calculation based on the longest contiguous matching block found
-                match_ratio = match.size / len(search_text)
-                # Alternative: matcher.ratio() considers the whole strings including non-matching parts
-                # match_ratio = matcher.ratio()
-                # Let's stick with match.size / len(search_text) as it focuses on the quality of the best block found
+            found_match_for_block = False
+            # Iterate through each line of the actual file content as a potential start
+            for file_start_index in range(len(file_lines)):
+                # Check if this starting line is already part of a previous successful match
+                if file_start_index in already_matched_file_line_indices:
+                    continue
 
-            print(f"Block {i+1} Fuzzy match for '{rel_path}': Ratio: {match_ratio:.2f} (Chars: {match.size}/{len(search_text)}) at char index {match.a}", file=sys.stderr)
+                # Compare the first search line (stripped) with the current file line (stripped)
+                match_ratio = _compare_stripped_lines(search_lines[0], file_lines[file_start_index])
 
-            if match_ratio < similarity_threshold:
-                # Provide context around the best (but failed) match character index
-                error_char_index = match.a
-                error_line_num = file_content.count('\n', 0, error_char_index) + 1
-                errors.append(
-                    f"Block {i+1}: Could not find a sufficiently similar block (ratio {match_ratio:.2f} < {similarity_threshold:.2f}) "
-                    f"for the SEARCH text in '{posix_rel_path}'.\n"
-                    f"Closest match near line {error_line_num} (char index {error_char_index}):\n"
-                    f"```\n{search_text}\nreplacing with\n{replace_text}```"
-                )
-            else:
-                # Match Found - Calculate line numbers from character indices
-                start_char_index = match.a
-                end_char_index = match.a + match.size # Index after the last matched character
+                if match_ratio >= similarity_threshold:
+                    # First line matches, now try to match subsequent lines sequentially
+                    match_len = 1 # Number of matched lines so far
+                    all_search_lines_matched = True
+                    for search_line_index in range(1, len(search_lines)):
+                        file_line_index = file_start_index + search_line_index
+                        # Check if we've run out of file lines or if the line is already matched
+                        if file_line_index >= len(file_lines) or file_line_index in already_matched_file_line_indices:
+                            all_search_lines_matched = False
+                            break # Cannot match further
 
-                # Calculate 1-based start line
-                start_line = file_content.count('\n', 0, start_char_index) + 1
+                        # Compare current search line with corresponding file line
+                        subsequent_match_ratio = _compare_stripped_lines(search_lines[search_line_index], file_lines[file_line_index])
+                        if subsequent_match_ratio < similarity_threshold:
+                            all_search_lines_matched = False
+                            break # Mismatch found, abandon this sequence attempt
+                        match_len += 1 # This line matched, increment count
 
-                # Calculate 1-based line number containing the *last* character of the match
-                # Need to handle edge case where match.size is 0 (shouldn't happen if ratio > 0)
-                # or where the match ends exactly at the end of the file without a newline.
-                last_char_index = end_char_index - 1
-                if last_char_index < start_char_index: # Handle empty match case if it slips through
-                     end_line_containing_last_char = start_line
-                else:
-                     end_line_containing_last_char = file_content.count('\n', 0, last_char_index) + 1
+                    # Check if all search lines were matched sequentially for this attempt
+                    if all_search_lines_matched:
+                        # --- Match Found for this block ---
+                        start_line_num = file_start_index + 1 # 1-based line number
+                        # End line is the start line + number of matched lines
+                        end_line_num_inclusive = start_line_num + match_len - 1
+                        # Elisp needs the line number *after* the last line to delete
+                        elisp_end_line_num = end_line_num_inclusive + 1
 
-                # Elisp's delete-region uses an *exclusive* end point.
-                # To delete lines inclusively from start_line to end_line_containing_last_char,
-                # we need to provide Elisp with the line number *after* the last line to delete.
-                elisp_end_line = end_line_containing_last_char + 1
+                        replacements_to_apply.append((start_line_num, elisp_end_line_num, replace_text))
+                        found_match_for_block = True
 
-                replacements_to_apply.append((start_line, elisp_end_line, replace_text))
-                # The print statement shows the *inclusive* line range being replaced for clarity
-                print(f"Block {i+1}: Match found >= threshold. Staging replacement for lines {start_line}-{elisp_end_line-1} (Elisp end: {elisp_end_line})")
+                        # Mark the file lines used by this match as consumed
+                        for i in range(match_len):
+                            already_matched_file_line_indices.add(file_start_index + i)
+
+                        print(f"Block {block_index+1}: Found sequential match for lines {start_line_num}-{end_line_num_inclusive} (Elisp end: {elisp_end_line_num}) in '{posix_rel_path}'", file=sys.stderr)
+                        # Stop searching for this specific block once a match is found
+                        break # Move to the next block
+
+            # If no match was found for this block after checking all possible start lines
+            if not found_match_for_block:
+                 errors.append(
+                    f"Block {block_index+1}: Could not find a sequential match for the SEARCH text in '{posix_rel_path}'.\n"
+                    f"SEARCH block:\n```\n{search_text}```"
+                 )
 
         # --- Handle Errors or Proceed ---
         if errors:
-            error_header = f"Failed to apply replacements to '{posix_rel_path}' due to {len(errors)} error(s):\n{replace_text}"
+            error_header = f"Failed to apply replacements to '{posix_rel_path}' due to {len(errors)} error(s):\n"
             error_details = "\n\n".join(errors)
             # Suggest reading the file again
             error_footer = "\nPlease use read_file to get the exact current content and try again with updated SEARCH blocks."

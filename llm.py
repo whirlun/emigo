@@ -14,6 +14,7 @@ passing the complete message history for each API call.
 """
 
 import importlib
+import json # Added for verbose logging
 import os
 import sys
 import time
@@ -149,9 +150,52 @@ class LLMClient:
                  # LiteLLM might handle this automatically, but explicitly setting can help
                  completion_kwargs["model"] = self.model_name.replace("ollama/", "")
 
-
         try:
+            # Initiate the LLM call first
             response = litellm.completion(**completion_kwargs)
+
+            # --- Verbose Logging (Moved After Call Initiation) ---
+            if self.verbose:
+                # Import json here if not already imported at the top level
+                import json
+                print("\n--- Sending to LLM ---", file=sys.stderr)
+                # Avoid printing potentially large base64 images in verbose mode
+                printable_messages = []
+                for msg in messages: # Use the 'messages' argument passed to send()
+                    if isinstance(msg.get("content"), list): # Handle image messages
+                        new_content = []
+                        for item in msg["content"]:
+                            if isinstance(item, dict) and item.get("type") == "image_url":
+                                # Truncate base64 data for printing
+                                 img_url = item.get("image_url", {}).get("url", "")
+                                 if isinstance(img_url, str) and img_url.startswith("data:"):
+                                     new_content.append({"type": "image_url", "image_url": {"url": img_url[:50] + "..."}})
+                                 else:
+                                     new_content.append(item) # Keep non-base64 or non-string URLs
+                            else:
+                                new_content.append(item)
+                        # Append the modified message with potentially truncated image data
+                        printable_messages.append({"role": msg["role"], "content": new_content})
+                    else:
+                        printable_messages.append(msg) # Append non-image messages as is
+
+                # Calculate approximate token count using litellm's utility
+                token_count_str = ""
+                try:
+                    # Ensure litellm is loaded before using its utilities
+                    litellm._load_litellm()
+                    # Use litellm's token counter if available
+                    count = litellm.token_counter(model=self.model_name, messages=messages)
+                    token_count_str = f" (estimated {count} tokens)"
+                except Exception as e:
+                     # Fallback or simple message if token counting fails
+                     # We can't easily use the agent's tokenizer here, so rely on litellm or skip detailed count
+                     token_count_str = f" (token count unavailable: {e})"
+
+
+                print(json.dumps(printable_messages, indent=2), file=sys.stderr)
+                print(f"--- End LLM Request{token_count_str} ---", file=sys.stderr)
+            # --- End Verbose Logging ---
 
             if stream:
                 # Generator to yield content chunks
