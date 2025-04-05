@@ -2,6 +2,12 @@
 # -*- coding: utf-8 -*-
 
 """
+Copyright (C) 2025 Emigo
+Author: Mingde (Matthew) Zeng <matthewzmd@posteo.net>
+        Andy Stewart <lazycat.manatee@gmail.com>
+Maintainer: Mingde (Matthew) Zeng <matthewzmd@posteo.net>
+            Andy Stewart <lazycat.manatee@gmail.com>
+
 The central orchestrator for the Emigo Python backend.
 
 This module runs the Python-side EPC (Emacs Process Communication) server,
@@ -25,24 +31,6 @@ Note: This module currently has a wide range of responsibilities and could
 potentially be refactored for better separation of concerns in the future.
 """
 
-# Copyright (C) 2025 Emigo
-#
-# Author: Mingde (Matthew) Zeng <matthewzmd@posteo.net>
-#         Andy Stewart <lazycat.manatee@gmail.com>
-# Maintainer: Mingde (Matthew) Zeng <matthewzmd@posteo.net>
-#             Andy Stewart <lazycat.manatee@gmail.com>
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import os
 import sys
@@ -56,6 +44,8 @@ import re
 from typing import Dict, List, Optional, Tuple
 from system_prompt import (
     TOOL_DENIED,
+)
+from tool_definitions import (
     # Tool Names
     TOOL_EXECUTE_COMMAND, TOOL_WRITE_TO_FILE,
     TOOL_ATTEMPT_COMPLETION
@@ -71,8 +61,7 @@ from session import Session
 import tools
 from tool_definitions import get_tool
 # Import json for displaying parameters during approval
-import json
-from typing import Dict, List, Optional, Tuple, Any # Add Any
+from typing import Any # Add Any
 
 class Emigo:
     def __init__(self, args):
@@ -108,8 +97,6 @@ class Emigo:
         self.worker_output_queue = queue.Queue() # Queue for messages from worker stdout
         self.pending_tool_requests: Dict[str, Dict] = {} # {request_id: original_tool_request_data}
         self.active_interaction_session: Optional[str] = None # Track which session is currently interacting
-        # Removed repo_mappers and session_caches, now managed by Session objects
-
 
         # --- EPC Server Setup ---
         print("Emigo __init__: Setting up Python EPC server...", file=sys.stderr, flush=True) # DEBUG + flush

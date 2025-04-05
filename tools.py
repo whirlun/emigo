@@ -34,11 +34,11 @@ from typing import Dict, List, Tuple, Optional, Any # Add Any
 # Import Session class for type hinting and accessing session state
 from session import Session
 # Import utilities for calling Emacs and file reading
-from utils import get_emacs_func_result, eval_in_emacs, read_file_content, get_emacs_var
+from utils import get_emacs_func_result, eval_in_emacs, read_file_content
 # Import system prompt constants for standard messages/prefixes
-from system_prompt import (
+from config import (
     TOOL_RESULT_SUCCESS, TOOL_RESULT_OUTPUT_PREFIX,
-    TOOL_REPLACE_IN_FILE, TOOL_DENIED, TOOL_ERROR_PREFIX, TOOL_ERROR_SUFFIX
+    TOOL_DENIED, TOOL_ERROR_PREFIX, TOOL_ERROR_SUFFIX
 )
 
 # --- Helper Functions ---
@@ -190,8 +190,6 @@ def _parse_search_replace_blocks(diff_str: str) -> Tuple[List[Tuple[str, str]], 
 
         blocks.append((search_text, replace_text))
 
-    # Removed the incorrect append call that was outside the loop
-
     return blocks, None
 
 def _get_line_number(text: str, char_index: int) -> int:
@@ -203,11 +201,6 @@ def replace_in_file(session: Session, parameters: Dict[str, str]) -> str:
     rel_path = parameters.get("path")
     diff_str = parameters.get("diff")
     similarity_threshold = 0.85 # Configurable threshold (85%)
-
-    if not rel_path:
-        return _format_tool_error(f"Missing required parameter 'path' for {TOOL_REPLACE_IN_FILE}")
-    if not diff_str:
-        return _format_tool_error(f"Missing required parameter 'diff' (SEARCH/REPLACE block) for {TOOL_REPLACE_IN_FILE}")
 
     abs_path = os.path.abspath(os.path.join(session.session_path, rel_path))
     posix_rel_path = rel_path.replace(os.sep, '/')
@@ -489,7 +482,8 @@ def search_files(session: Session, parameters: Dict[str, Any]) -> str:
     # Validate/sanitize max_matches
     try:
         max_matches = min(200, int(max_matches_arg)) # Cap at 200
-        if max_matches <= 0: max_matches = 50 # Ensure positive, default 50
+        if max_matches <= 0:
+            max_matches = 50 # Ensure positive, default 50
     except (ValueError, TypeError):
         max_matches = 50 # Default if conversion fails
 

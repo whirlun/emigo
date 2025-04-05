@@ -26,34 +26,6 @@ the map generation for a specific user session. It also includes a command-line
 interface for standalone usage and debugging.
 """
 
-# Based on code from the Aider project: https://github.com/paul-gauthier/aider
-#
-# This script generates a repository map, which is a concise representation of
-# the codebase structure and relevant code snippets, intended to be included in
-# the context provided to a Large Language Model (LLM).
-#
-# Default Behavior (LLM Context):
-# By default, the script performs a ranking algorithm (PageRank) based on code
-# dependencies and context provided via command-line parameters (--chat-files,
-# --mentioned-files, --mentioned-idents). It then selects the most relevant
-# code definitions and files, formats them into snippets using tree-sitter,
-# and prunes the result to fit within a specified token limit (--map-tokens).
-# This produces a concise, context-aware map suitable for LLM context windows.
-#
-# --render-cache Behavior (Debugging/Inspection):
-# When the --render-cache flag is used, the script bypasses the ranking and
-# token-limiting steps. It loads all tags (definitions and references) from the
-# cache directory and renders them using the same snippet-generation
-# logic (TreeContext). This often results in showing large portions,
-# or even the entirety, of the cached files. This mode is useful for
-# inspecting the raw information captured by the tagger and the output of the
-# rendering engine, but its output is generally too large and unfiltered for
-# direct use as LLM context.
-#
-# Install dependencies:
-# pip install networkx pygments grep-ast diskcache tiktoken tqdm gitignore_parser scipy
-# """ # Keep the closing quote if it was intended for the module docstring above
-
 import argparse
 import math
 import os

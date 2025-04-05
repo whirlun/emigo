@@ -29,22 +29,6 @@ import json
 import time
 import traceback
 import os
-import re # Import the regular expression module
-
-# Add project root to sys.path to allow importing other modules like llm, agents, utils
-project_root = os.path.dirname(os.path.abspath(__file__))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
-import traceback
-import os
-import json # Ensure json is imported
-import time # Ensure time is imported
-
-# Add project root to sys.path to allow importing other modules like llm, agents, utils
-project_root = os.path.dirname(os.path.abspath(__file__))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
 
 from utils import _filter_environment_details
 from llm import LLMClient
@@ -54,6 +38,11 @@ from tool_definitions import get_all_tools
 from llm_providers import get_formatted_tools
 # Import constants used for tool results
 from system_prompt import TOOL_DENIED, TOOL_ERROR_PREFIX
+
+# Add project root to sys.path to allow importing other modules like llm, agents, utils
+project_root = os.path.dirname(os.path.abspath(__file__))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 # --- Communication Functions ---
 
@@ -197,7 +186,6 @@ def handle_interaction_request(request):
             tool_call_fragments = {} # {index: {id:.., type:.., function:{name:.., arguments:...}}}
             reconstructed_tool_calls = [] # List to store final tool calls for history [{id:.., type:.., function:{name:.., arguments:...}}]
             llm_error_occurred = False # Flag to track LLM errors
-            llm_stream_exception = None # Store exception if stream fails
 
             try:
                 # Get available tools and format them for the provider

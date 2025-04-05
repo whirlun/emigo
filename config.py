@@ -15,6 +15,16 @@ Centralizing these configurations makes them easier to manage and modify.
 
 import os
 
+
+# --- Tool Result/Error Messages ---
+
+TOOL_RESULT_SUCCESS = "Tool executed successfully."
+TOOL_RESULT_OUTPUT_PREFIX = "Tool output:\n"
+TOOL_DENIED = "The user denied this operation."
+TOOL_ERROR_PREFIX = "[Tool Error] "
+TOOL_ERROR_SUFFIX = ""
+
+
 # --- Ignored Directories ---
 # Used in agents.py (_get_environment_details) and repomapper.py (_find_src_files)
 # Combine common ignored directories from both places.

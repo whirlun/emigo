@@ -12,7 +12,7 @@ This module provides:
 - Helper functions to retrieve tool definitions.
 """
 
-from typing import Callable, Dict, List, TypedDict, Literal, Any, Optional
+from typing import Callable, Dict, List, TypedDict, Literal, Optional
 # Import tool implementation functions from tools.py
 from tools import (
     execute_command,
@@ -25,6 +25,19 @@ from tools import (
     ask_followup_question,
     attempt_completion
 )
+
+
+# --- Tool Name Constants ---
+TOOL_EXECUTE_COMMAND = "execute_command"
+TOOL_READ_FILE = "read_file"
+TOOL_WRITE_TO_FILE = "write_to_file"
+TOOL_REPLACE_IN_FILE = "replace_in_file"
+TOOL_SEARCH_FILES = "search_files"
+TOOL_LIST_FILES = "list_files"
+TOOL_LIST_REPOMAP = "list_repomap"
+TOOL_ASK_FOLLOWUP_QUESTION = "ask_followup_question"
+TOOL_ATTEMPT_COMPLETION = "attempt_completion"
+
 
 # --- Type Definitions ---
 
@@ -186,15 +199,3 @@ def get_tool(name: str) -> Optional[ToolDefinition]:
 def get_all_tools() -> List[ToolDefinition]:
     """Retrieves a list of all registered tool definitions."""
     return list(TOOL_REGISTRY.values())
-
-# --- Tool Name Constants (Redundant if importing from system_prompt, but useful here) ---
-# These should match the 'name' field in the definitions above
-TOOL_EXECUTE_COMMAND = "execute_command"
-TOOL_READ_FILE = "read_file"
-TOOL_WRITE_TO_FILE = "write_to_file"
-TOOL_REPLACE_IN_FILE = "replace_in_file"
-TOOL_SEARCH_FILES = "search_files"
-TOOL_LIST_FILES = "list_files"
-TOOL_LIST_REPOMAP = "list_repomap"
-TOOL_ASK_FOLLOWUP_QUESTION = "ask_followup_question"
-TOOL_ATTEMPT_COMPLETION = "attempt_completion"

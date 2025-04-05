@@ -10,9 +10,8 @@ It constructs prompts, processes LLM responses, and determines when to use tools
 
 import json # Keep for parsing LLM responses if needed
 import os
-import re
 import sys
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 
 from llm import LLMClient
 from repomapper import RepoMapper # Keep for agent's internal use if needed (e.g., environment details)
@@ -22,7 +21,6 @@ from llm_providers import get_formatted_tools
 # Import only the base system prompt template
 from system_prompt import MAIN_SYSTEM_PROMPT
 import tiktoken # For token counting
-import json # For formatting tool list
 
 from utils import (
     get_os_name,

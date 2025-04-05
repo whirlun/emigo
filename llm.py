@@ -14,7 +14,7 @@ passing the complete message history for each API call.
 """
 
 import importlib
-import json # Added for verbose logging
+import json
 import os
 import sys
 import time
@@ -137,7 +137,6 @@ class LLMClient:
         litellm._load_litellm()
 
         completion_kwargs = {
-            "model": self.model_name,
             "model": self.model_name,
             "messages": messages,
             "stream": stream,
@@ -311,7 +310,6 @@ def main():
     messages.append({"role": "assistant", "content": full_streamed_response})
 
     print("\n--- Final Messages List ---")
-    import json
     print(json.dumps(messages, indent=2))
 
 

@@ -49,10 +49,7 @@ import re
 
 from epc.client import EPCClient
 
-try:
-    import orjson as json_parser
-except:
-    import json as json_parser
+import orjson as json_parser
 
 epc_client: Optional[EPCClient] = None
 

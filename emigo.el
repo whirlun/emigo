@@ -9,7 +9,7 @@
 ;; Copyright (C) 2025, Emigo, all rights reserved.
 ;; Created: 2025-03-29
 ;; Version: 0.5
-;; Last-Updated: Fri Apr  4 02:48:34 2025 (-0400)
+;; Last-Updated: Fri Apr  4 22:23:18 2025 (-0400)
 ;;           By: Mingde (Matthew) Zeng
 ;; Package-Requires: ((emacs "26.1") (transient "0.3.0") (compat "30.0.2.0") (markdown-mode "2.6"))
 ;; Keywords: ai emacs llm aider ai-pair-programming tools
@@ -411,6 +411,9 @@ as the session path."
       ;; Add buffer to tracked list
       (add-to-list 'emigo-project-buffers buffer t) ;; Use t to avoid duplicates
 
+      (advice-add 'delete-other-windows :around #'emigo--advice-delete-other-windows)
+      (advice-add 'other-windows :around #'emigo--advice-other-window)
+ 
       ;; Switch to or display the buffer
       (emigo-create-window buffer) ;; Use the specific buffer
 
@@ -771,12 +774,6 @@ Skip the dedicated Emigo window when cycling."
       ;; Otherwise, return the window selected by the original call.
       target-window)))
 
-;; Add window management advice globally (or consider adding/removing in enable/disable)
-(advice-add 'delete-other-windows :around #'emigo--advice-delete-other-windows)
-;; Using :filter-return to modify the *result* of other-window might be cleaner,
-;; but let's stick with :around for consistency for now. Revisit if needed.
-;; (advice-add 'other-window :around #'emigo--advice-other-window)
-;; Let's try :filter-return for other-window as it's less intrusive
 (defun emigo--filter-return-other-window (window)
   "Filter return value of `other-window' to skip Emigo window."
   (if (and (emigo-window-exist-p emigo-window)
@@ -786,11 +783,6 @@ Skip the dedicated Emigo window when cycling."
       ;; A more robust solution would need access to the original args.
       (other-window 1)
     window))
-;; (advice-add 'other-window :filter-return #'emigo--filter-return-other-window)
-;; Reverting other-window advice for now as filter-return might cause infinite loops
-;; and the :around logic needs careful state checking. The original defadvice might
-;; have been sufficient or needs a more complex :around wrapper. Let's remove it
-;; until a better solution is found.
 
 ;; --- End Window Management Advice ---
 
