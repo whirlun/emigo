@@ -37,7 +37,7 @@ from agents import Agents
 from tool_definitions import get_all_tools
 from llm_providers import get_formatted_tools
 # Import constants used for tool results
-from system_prompt import TOOL_DENIED, TOOL_ERROR_PREFIX
+from config import TOOL_DENIED, TOOL_ERROR_PREFIX
 
 # Add project root to sys.path to allow importing other modules like llm, agents, utils
 project_root = os.path.dirname(os.path.abspath(__file__))

@@ -42,8 +42,8 @@ import queue
 import time
 import re
 from typing import Dict, List, Optional, Tuple
-from system_prompt import (
-    TOOL_DENIED,
+from config import (
+    TOOL_DENIED
 )
 from tool_definitions import (
     # Tool Names
