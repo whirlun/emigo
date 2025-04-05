@@ -691,13 +691,14 @@ If on a prompt line:
         (delete-region (point) (point-max)))
       (emigo-call-async "emigo_send" emigo-session-path prompt))))
 
-(defun emigo--flush-buffer (session-path content &optional role)
+(defun emigo--flush-buffer (session-path content &optional role tool-id)
   "Flush CONTENT to the Emigo buffer associated with SESSION-PATH.
-ROLE is optional and defaults to nil."
+ROLE indicates the type of content (e.g., 'user', 'llm', 'tool_json', 'tool_json_args', 'tool_json_end').
+TOOL-ID is used for streaming tool JSON fragments."
   (let ((buffer-name (emigo-get-buffer-name nil session-path))
         (buffer (get-buffer (emigo-get-buffer-name t session-path)))) ;; Find existing buffer
     (unless buffer
-      (warn "[Emigo] Could not find buffer for session %s to flush content." session-path)
+      (warn "[Emigo] Could not find buffer for session %s to flush content: %s" session-path content)
       (cl-return-from emigo-flush-buffer))
     (with-current-buffer buffer
       (save-excursion
@@ -713,8 +714,11 @@ ROLE is optional and defaults to nil."
             (cond
              ((equal role "user")
               (insert (propertize content-str 'face font-lock-keyword-face)))
-             ((equal role "tool_json")
-              ;; Insert JSON content wrapped in an Org source block
+             ((member role '("tool_json" "tool_json_args" "tool_json_end"))
+              ;; Insert JSON fragments directly. Assumes they arrive sequentially.
+              ;; TODO: Add Org block wrapping? For now, just insert raw fragments.
+              ;; If wrapping is desired, need state management based on tool-id.
+              ;; For simplicity now, just insert the content.
               (insert content-str))
              (t ;; Default case (e.g., role="llm", "error", "warning")
               (insert content-str)

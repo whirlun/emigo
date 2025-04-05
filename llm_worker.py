@@ -263,19 +263,25 @@ def handle_interaction_request(request):
                                             "function": {"name": func_name, "arguments": ""}
                                         }
                                         print(f"  - Started tool call fragment {index}: id={tool_id}, name={func_name}", file=sys.stderr)
+                                        # --- Send Start of JSON Structure ---
+                                        start_json = f'{{"tool_name": "{func_name}", "parameters": {{'
+                                        send_message("stream", session_path, role="tool_json", content=start_json, tool_id=tool_id)
                                     else:
                                         print(f"  - Skipping incomplete tool call chunk (missing id or func name): {call_chunk}", file=sys.stderr)
                                         continue # Skip if essential init info is missing
 
-                                # --- Append argument chunks ---
+                                # --- Append and Stream Argument Chunks ---
                                 # Check if fragment was successfully initialized before appending args
                                 if index in tool_call_fragments:
                                     # Safely access arguments
                                     function_obj = getattr(call_chunk, 'function', None)
                                     arguments_chunk = getattr(function_obj, 'arguments', None) if function_obj else None
                                     if arguments_chunk:
+                                        # Append to internal fragment storage (still needed for final parsing/history)
                                         tool_call_fragments[index]["function"]["arguments"] += arguments_chunk
-                                        # print(f"  - Appended args to fragment {index}: {arguments_chunk}", file=sys.stderr) # Very verbose
+                                        # --- Stream Argument Chunk ---
+                                        send_message("stream", session_path, role="tool_json_args", content=arguments_chunk, tool_id=tool_call_fragments[index]["id"])
+                                        # print(f"  - Streamed args chunk for fragment {index}: {arguments_chunk}", file=sys.stderr) # Verbose
                     except Exception as e:
                          print(f"  - Error processing delta.tool_calls: {e}. Delta: {delta}", file=sys.stderr)
                          # Continue processing other parts if possible
@@ -323,14 +329,8 @@ def handle_interaction_request(request):
                             tool_call_tuple = (tool_call_id, func_name, parameters)
                             tool_calls_extracted.append(tool_call_tuple)
                             print(f"  - Parsed tool call {index}: {func_name}({parameters}) (ID: {tool_call_id})", file=sys.stderr)
-                            # --- Send parsed JSON to main process for display ---
-                            try:
-                                tool_call_json_obj = {"tool_name": func_name, "parameters": parameters}
-                                tool_call_json_str = json.dumps(tool_call_json_obj, indent=2)
-                                send_message("stream", session_path, role="tool_json", content=tool_call_json_str)
-                            except Exception as json_err:
-                                print(f"  - Error formatting tool call JSON for streaming: {json_err}", file=sys.stderr)
-                            # --- End send JSON ---
+                            # --- JSON streaming is handled during the chunk processing loop ---
+                            # (Keep the parsing logic here to prepare for execution)
                         else:
                             print(f"  - Error: Arguments for tool {func_name} (Index {index}) is not a JSON object: {arguments_str}", file=sys.stderr)
                             # Don't add to tool_calls_extracted if params are invalid
@@ -447,6 +447,16 @@ def handle_interaction_request(request):
 
 
         # --- End of Turn Loop ---
+
+        # --- Send End of JSON Structure for each tool call ---
+        if tool_call_fragments:
+            print(f"Worker: Sending end markers for {len(tool_call_fragments)} tool calls.", file=sys.stderr)
+            for index in sorted(tool_call_fragments.keys()):
+                fragment = tool_call_fragments[index]
+                tool_id = fragment.get("id")
+                if tool_id:
+                    end_json = "}}"
+                    send_message("stream", session_path, role="tool_json_end", content=end_json, tool_id=tool_id)
 
         # Signal interaction finished
         # Determine status based on whether an LLM error occurred or max turns were reached

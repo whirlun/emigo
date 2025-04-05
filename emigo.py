@@ -372,16 +372,21 @@ class Emigo:
                 # print(f"Processing worker message: {message}", file=sys.stderr) # Debug
 
                 if msg_type == "stream":
-                    role = message.get("role", "llm") # Default to llm role
-                    # Ensure content is never None, default to empty string, and filter it
-                    content = message.get("content") or ""
-                    filtered_content = _filter_environment_details(content)
-                    if role == "tool_json":
-                        # Don't filter JSON content, pass it directly
-                        eval_in_emacs("emigo--flush-buffer", session_path, content, role)
-                    elif filtered_content: # For other roles, flush only if content remains after filtering
-                        eval_in_emacs("emigo--flush-buffer", session_path, filtered_content, role)
-                    # History is updated via the 'finished' message for regular assistant/user roles
+                    role = message.get("role", "llm")
+                    content = message.get("content") or "" # Ensure content is never None
+
+                    # Handle different stream types
+                    if role in ["tool_json", "tool_json_args", "tool_json_end"]:
+                        # Pass JSON fragments directly without filtering
+                        # Include tool_id if present (for args/end roles)
+                        tool_id = message.get("tool_id")
+                        eval_in_emacs("emigo--flush-buffer", session_path, content, role, tool_id)
+                    else:
+                        # Filter non-JSON content (user, llm, error, warning)
+                        filtered_content = _filter_environment_details(content)
+                        if filtered_content: # Flush only if content remains after filtering
+                            eval_in_emacs("emigo--flush-buffer", session_path, filtered_content, role)
+                    # History is updated via the 'finished' message
 
                 elif msg_type == "tool_request":
                     request_id = message.get("request_id")
