@@ -212,21 +212,23 @@ class LLMClient:
             if stream:
                 # Generator to yield the raw litellm chunk objects
                 def raw_chunk_stream():
+                    # Move the try/except block inside the generator
                     try:
+                        # The 'response' variable is accessible due to closure
                         for chunk in response:
                             yield chunk # Yield the original chunk object
-                    except litellm.exceptions.APIConnectionError as e:
-                        # Catch the specific error observed in the traceback during stream iteration
-                        print(f"\n[LLMClient Warning] Caught APIConnectionError during stream processing: {e}", file=sys.stderr)
-                        print("[LLMClient Warning] Stream may be incomplete due to provider error.", file=sys.stderr)
-                        # Optionally yield one last error message? For now, just break.
-                        # yield {"error": f"Stream interrupted by APIConnectionError: {e}"}
-                        pass # Gracefully end the stream
+                    except litellm.exceptions.APIConnectionError as e: # Catch specific error
+                        # Log the specific error clearly
+                        print(f"\n[LLMClient Stream Error] Caught APIConnectionError: {e}", file=sys.stderr)
+                        print("[LLMClient Stream Error] Stream may be incomplete.", file=sys.stderr)
+                        # Allow the generator to terminate gracefully by letting the exception propagate
+                        # or by simply finishing the loop (pass). 'pass' is sufficient here.
+                        pass
                     except Exception as e:
                         # Catch other potential errors during streaming
-                        print(f"\n[LLMClient Warning] Caught unexpected error during stream processing: {e}", file=sys.stderr)
-                        pass # Gracefully end the stream
-
+                        print(f"\n[LLMClient Stream Error] Caught unexpected error: {e}", file=sys.stderr)
+                        # Allow the generator to terminate gracefully
+                        pass
 
                 return raw_chunk_stream() # Return the generator yielding full chunks
             else:
@@ -234,33 +236,17 @@ class LLMClient:
                 # The caller (llm_worker) will parse content or tool calls
                 return response # Return the whole LiteLLM response object
 
+        # Keep exception handling for non-streaming calls or errors *before* streaming starts
         except litellm.APIConnectionError as e:
-            # Handle connection errors specifically (like the OpenRouterException)
-            error_message = f"API Connection Error: {e}"
-            print(f"\n{error_message}", file=sys.stderr)
-            # Optionally log the messages sent for debugging
-            # print(f"Messages sent: {messages}", file=sys.stderr)
-            if stream:
-                # Yield the error message as part of the stream
-                def error_stream():
-                    yield f"[LLM Error: {error_message}]"
-                return error_stream()
-            else:
-                return f"[LLM Error: {error_message}]" # Return error message directly
-
+             error_message = f"API Connection Error (pre-stream or non-stream): {e}"
+             print(f"\n{error_message}", file=sys.stderr)
+             # For non-streaming, return the error string
+             return f"[LLM Error: {error_message}]"
         except Exception as e:
-            # Catch other potential exceptions from litellm
-            error_message = f"General Error during LLM communication: {e}"
-            print(f"\n{error_message}", file=sys.stderr)
-            # Optionally log the messages sent for debugging
-            # print(f"Messages sent: {messages}", file=sys.stderr)
-            if stream:
-                 # Yield the error message as part of the stream
-                def error_stream():
-                    yield f"[LLM Error: {error_message}]"
-                return error_stream()
-            else:
-                return f"[LLM Error: {error_message}]" # Return error message directly
+             error_message = f"General Error (pre-stream or non-stream): {e}"
+             print(f"\n{error_message}", file=sys.stderr)
+             # For non-streaming, return the error string
+             return f"[LLM Error: {error_message}]"
 
 
 # --- Example Usage (Optional) ---
