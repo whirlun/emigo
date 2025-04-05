@@ -161,32 +161,42 @@ def _parse_search_replace_blocks(diff_str: str) -> Tuple[List[Tuple[str, str]], 
     # Use regex to find all blocks non-greedily
     pattern = re.compile(
         re.escape(search_marker) +
-        '(.*?)' + # Capture search text (non-greedy)
+        '(.*?)' +  # Capture search text (non-greedy)
         re.escape(divider_marker) +
-        '(.*?)' + # Capture replace text (non-greedy)
+        '(.*?)' +  # Capture replace text (non-greedy)
         re.escape(replace_marker),
-        re.DOTALL # Allow '.' to match newlines
+        re.DOTALL  # Allow '.' to match newlines
     )
 
-    found_blocks = pattern.findall(diff_str)
+    found_blocks_raw = pattern.findall(diff_str)
 
-    if not found_blocks:
+    if not found_blocks_raw:
         # Check for common markdown fence if no blocks found
         if "```" in diff_str and search_marker not in diff_str:
-             return [], "Diff content seems to be a markdown code block, not a SEARCH/REPLACE block."
+            return [], "Diff content seems to be a markdown code block, not a SEARCH/REPLACE block."
         return [], "No valid SEARCH/REPLACE blocks found in the provided diff."
 
-    for search_text, replace_text in found_blocks:
+    for search_text, replace_text in found_blocks_raw:
         # Basic validation: ensure markers are not nested within text itself in unexpected ways
+        # This check is basic and might not catch all complex nesting scenarios.
         if search_marker in search_text or divider_marker in search_text or replace_marker in search_text or \
            search_marker in replace_text or divider_marker in replace_text or replace_marker in replace_text:
-            # This is a simplistic check; complex nesting could still fool it.
-            # Consider more robust parsing if needed.
-            return [], "Detected malformed or nested SEARCH/REPLACE markers within a block's content."
+            return [], f"Detected malformed or nested SEARCH/REPLACE markers within a block's content:\nSearch:\n{search_text}\nReplace:\n{replace_text}"
+
+        # Optional: Remove trailing newline from replace_text if needed,
+        # but generally keep content as-is from the LLM.
+        # if replace_text.endswith('\n'):
+        #     replace_text = replace_text[:-1]
+
         blocks.append((search_text, replace_text))
+
+    # Removed the incorrect append call that was outside the loop
 
     return blocks, None
 
+def _get_line_number(text: str, char_index: int) -> int:
+    """Calculates the 1-based line number for a given character index."""
+    return text.count('\n', 0, char_index) + 1
 
 def replace_in_file(session: Session, parameters: Dict[str, str]) -> str:
     """Replaces content in a file using SEARCH/REPLACE blocks via Emacs."""
@@ -222,6 +232,7 @@ def replace_in_file(session: Session, parameters: Dict[str, str]) -> str:
 
         # --- Parse *All* Diff Blocks ---
         parsed_blocks, parse_error = _parse_search_replace_blocks(diff_str)
+        print("Block", parsed_blocks, "Error", parse_error)
         if parse_error:
             return _format_tool_error(parse_error)
         if not parsed_blocks:
@@ -253,57 +264,63 @@ def replace_in_file(session: Session, parameters: Dict[str, str]) -> str:
 
             found_match_for_block = False
             # Iterate through each line of the actual file content as a potential start
+            # Use range(len(file_lines)) to avoid issues if file_lines is modified (it shouldn't be here)
             for file_start_index in range(len(file_lines)):
                 # Check if this starting line is already part of a previous successful match
                 if file_start_index in already_matched_file_line_indices:
-                    continue
+                    continue # Skip this starting line if it's already consumed
 
-                # Compare the first search line (stripped) with the current file line (stripped)
-                match_ratio = _compare_stripped_lines(search_lines[0], file_lines[file_start_index])
+                # --- Attempt to match the *entire* search block starting here ---
+                current_match_len = 0
+                potential_match_indices = set() # Track indices for this *potential* match
+                all_search_lines_matched_sequentially = True
 
-                if match_ratio >= similarity_threshold:
-                    # First line matches, now try to match subsequent lines sequentially
-                    match_len = 1 # Number of matched lines so far
-                    all_search_lines_matched = True
-                    for search_line_index in range(1, len(search_lines)):
-                        file_line_index = file_start_index + search_line_index
-                        # Check if we've run out of file lines or if the line is already matched
-                        if file_line_index >= len(file_lines) or file_line_index in already_matched_file_line_indices:
-                            all_search_lines_matched = False
-                            break # Cannot match further
+                for search_line_index in range(len(search_lines)):
+                    current_file_index = file_start_index + search_line_index
 
-                        # Compare current search line with corresponding file line
-                        subsequent_match_ratio = _compare_stripped_lines(search_lines[search_line_index], file_lines[file_line_index])
-                        if subsequent_match_ratio < similarity_threshold:
-                            all_search_lines_matched = False
-                            break # Mismatch found, abandon this sequence attempt
-                        match_len += 1 # This line matched, increment count
+                    # Check bounds and if the *current* file line is already consumed
+                    if current_file_index >= len(file_lines) or current_file_index in already_matched_file_line_indices:
+                        all_search_lines_matched_sequentially = False
+                        # print(f"  Debug: Match failed at search line {search_line_index+1}: File index {current_file_index} out of bounds or already matched.", file=sys.stderr)
+                        break # Cannot match further from this file_start_index
 
-                    # Check if all search lines were matched sequentially for this attempt
-                    if all_search_lines_matched:
-                        # --- Match Found for this block ---
-                        start_line_num = file_start_index + 1 # 1-based line number
-                        # End line is the start line + number of matched lines
-                        end_line_num_inclusive = start_line_num + match_len - 1
-                        # Elisp needs the line number *after* the last line to delete
-                        elisp_end_line_num = end_line_num_inclusive + 1
+                    # Compare current search line with corresponding file line (stripped)
+                    match_ratio = _compare_stripped_lines(search_lines[search_line_index], file_lines[current_file_index])
 
-                        replacements_to_apply.append((start_line_num, elisp_end_line_num, replace_text))
-                        found_match_for_block = True
+                    if match_ratio < similarity_threshold:
+                        all_search_lines_matched_sequentially = False
+                        # print(f"  Debug: Match failed at search line {search_line_index+1}: Similarity {match_ratio:.2f} < {similarity_threshold} for file index {current_file_index}.", file=sys.stderr)
+                        break # Mismatch found, abandon this sequence attempt for this file_start_index
 
-                        # Mark the file lines used by this match as consumed
-                        for i in range(match_len):
-                            already_matched_file_line_indices.add(file_start_index + i)
+                    # Line matches, record index for this potential block match
+                    potential_match_indices.add(current_file_index)
+                    current_match_len += 1
 
-                        print(f"Block {block_index+1}: Found sequential match for lines {start_line_num}-{end_line_num_inclusive} (Elisp end: {elisp_end_line_num}) in '{posix_rel_path}'", file=sys.stderr)
-                        # Stop searching for this specific block once a match is found
-                        break # Move to the next block
+                # --- Check if the *entire block* matched sequentially ---
+                if all_search_lines_matched_sequentially:
+                    # --- Match Found for this block ---
+                    start_line_num = file_start_index + 1 # 1-based line number
+                    # End line is the start line + number of matched lines
+                    end_line_num_inclusive = start_line_num + current_match_len - 1
+                    # Elisp needs the line number *after* the last line to delete
+                    elisp_end_line_num = end_line_num_inclusive + 1
+
+                    replacements_to_apply.append((start_line_num, elisp_end_line_num, replace_text))
+                    found_match_for_block = True
+
+                    # Mark the file lines used by this *confirmed* match as consumed
+                    already_matched_file_line_indices.update(potential_match_indices)
+
+                    print(f"Block {block_index+1}: Found sequential match for lines {start_line_num}-{end_line_num_inclusive} (Elisp end: {elisp_end_line_num}) in '{posix_rel_path}'", file=sys.stderr)
+
+                    # Stop searching for *this specific block* once a match is found
+                    break # Exit the inner loop (file_start_index loop) and move to the next block in parsed_blocks
 
             # If no match was found for this block after checking all possible start lines
             if not found_match_for_block:
                  errors.append(
                     f"Block {block_index+1}: Could not find a sequential match for the SEARCH text in '{posix_rel_path}'.\n"
-                    f"SEARCH block:\n```\n{search_text}```"
+                    f"SEARCH block start:\n```\n{''.join(search_lines[:5])}{'...' if len(search_lines) > 5 else ''}\n```" # Show start of block
                  )
 
         # --- Handle Errors or Proceed ---
