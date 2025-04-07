@@ -307,6 +307,11 @@ def handle_interaction_request(request):
                 interaction_history.append({"role": "assistant", "content": f"[LLM Error: {e}]"})
                 # No 'break' here, let it proceed to 'finished' message
 
+            # --- Check if stream loop ended due to error ---
+            if llm_error_occurred:
+                print("Worker: Breaking outer turn loop due to detected LLM stream error.", file=sys.stderr)
+                break # Exit the 'for turn...' loop immediately
+
             # 3. Process Response (Parse Tool Calls from accumulated fragments)
             tool_calls_extracted = [] # List of (tool_call_id, tool_name, parameters_dict)
             reconstructed_tool_calls = [] # List of {id:.., type:.., function:{name:.., arguments:...}} for history
