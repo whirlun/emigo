@@ -4,7 +4,7 @@
 """
 Defines the Agent class responsible for the core logic of interacting with the LLM.
 
-This module contains the `Agents` class which encapsulates the agentic loop behavior.
+This module contains the `Agent` class which encapsulates the agentic loop behavior.
 It constructs prompts, processes LLM responses, and determines when to use tools.
 """
 
@@ -27,7 +27,7 @@ from utils import (
     eval_in_emacs
 )
 
-class Agents:
+class Agent:
     """
     Manages the agentic interaction loop for a given session.
 

@@ -12,7 +12,7 @@ EPC server process.
 Key Responsibilities:
 - Listens for interaction requests (including prompt, history, config, context)
   from `emigo.py` via stdin.
-- Initializes the `LLMClient` (from `llm.py`) and `Agents` (from `agents.py`)
+- Initializes the `LLMClient` (from `llm.py`) and `Agent` (from `agent.py`)
   for each interaction request.
 - Executes the main agentic loop: prepares prompts, calls the LLM, parses
   responses for tool usage.
@@ -32,14 +32,14 @@ import os
 
 from utils import _filter_environment_details
 from llm import LLMClient
-from agents import Agents
+from agent import Agent
 # Import tool definitions and provider formatting
 from tool_definitions import get_all_tools
 from llm_providers import get_formatted_tools
 # Import constants used for tool results
 from config import TOOL_DENIED, TOOL_ERROR_PREFIX
 
-# Add project root to sys.path to allow importing other modules like llm, agents, utils
+# Add project root to sys.path to allow importing other modules like llm, agent, utils
 project_root = os.path.dirname(os.path.abspath(__file__))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
@@ -131,11 +131,11 @@ def handle_interaction_request(request):
     # The main process owns the canonical chat_files state
     current_chat_files = {session_path: list(chat_files_list)}
 
-    # NOTE: This creates a new Agents instance for *every* request because
+    # NOTE: This creates a new Agent instance for *every* request because
     # the worker might be killed. If the worker were persistent, we might
     # reuse instances.
     # Environment details are fetched dynamically within the loop now.
-    agent = Agents(
+    agent = Agent(
         session_path=session_path,
         llm_client=llm_client,
         chat_files_ref=current_chat_files, # Pass the temporary dict
@@ -145,7 +145,7 @@ def handle_interaction_request(request):
     agent.environment_details_str = environment_details_str
 
     # --- Adapt Agent Interaction Logic ---
-    # Implement a version of Agents.run_interaction that uses our communication functions
+    # Implement a version of Agent.run_interaction that uses our communication functions
 
     # Override the agent's communication methods to use our send_message function
     def stream_to_main_process(content, role="llm"):
