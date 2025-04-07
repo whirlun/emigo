@@ -216,19 +216,19 @@ class LLMClient:
                     try:
                         # The 'response' variable is accessible due to closure
                         for chunk in response:
+                            # print(f"Raw chunk: {chunk}") # DEBUG: Ensure this is commented out
                             yield chunk # Yield the original chunk object
                     except litellm.exceptions.APIConnectionError as e: # Catch specific error
                         # Log the specific error clearly
                         print(f"\n[LLMClient Stream Error] Caught APIConnectionError: {e}", file=sys.stderr)
                         print("[LLMClient Stream Error] Stream may be incomplete.", file=sys.stderr)
-                        # Allow the generator to terminate gracefully by letting the exception propagate
-                        # or by simply finishing the loop (pass). 'pass' is sufficient here.
-                        pass
+                        # Yield an error marker instead of just passing
+                        yield {"_stream_error": True, "error_message": str(e)}
                     except Exception as e:
                         # Catch other potential errors during streaming
                         print(f"\n[LLMClient Stream Error] Caught unexpected error: {e}", file=sys.stderr)
-                        # Allow the generator to terminate gracefully
-                        pass
+                        # Yield an error marker
+                        yield {"_stream_error": True, "error_message": str(e)}
 
                 return raw_chunk_stream() # Return the generator yielding full chunks
             else:

@@ -183,8 +183,8 @@ def handle_interaction_request(request):
 
             # 2. Call LLM (directly using llm_client)
             full_response_text = "" # Accumulate the textual response
-            tool_call_fragments = {} # {index: {id:.., type:.., function:{name:.., arguments:...}}}
-            reconstructed_tool_calls = [] # List to store final tool calls for history [{id:.., type:.., function:{name:.., arguments:...}}]
+            tool_call_fragments = {} # {index: {"id": str, "type": str, "function": {"name": str, "arguments": str}}}
+            started_tool_calls = set() # Keep track of tool_ids for which 'tool_json' has been sent
             llm_error_occurred = False # Flag to track LLM errors
 
             try:
@@ -203,10 +203,21 @@ def handle_interaction_request(request):
 
                 # Stream text chunks and accumulate tool calls
                 for chunk in response_stream:
+                    # --- Check for stream error marker ---
+                    if isinstance(chunk, dict) and chunk.get("_stream_error"):
+                        llm_error_occurred = True
+                        error_message = f"[Error during LLM streaming: {chunk.get('error_message', 'Unknown stream error')}]"
+                        print(f"\n{error_message}", file=sys.stderr) # Print detailed error
+                        stream_to_main_process(error_message, "error") # Send simplified error
+                        # Add error to local history for this interaction attempt
+                        interaction_history.append({"role": "assistant", "content": error_message})
+                        break # Exit the stream processing loop
+
                     # --- Safely access delta ---
                     delta = None
                     try:
-                        if chunk and hasattr(chunk, 'choices') and chunk.choices and len(chunk.choices) > 0:
+                        # Ensure chunk is not the error marker before accessing choices/delta
+                        if chunk and not isinstance(chunk, dict) and hasattr(chunk, 'choices') and chunk.choices and len(chunk.choices) > 0:
                              # Access delta safely
                              if hasattr(chunk.choices[0], 'delta'):
                                  delta = chunk.choices[0].delta
@@ -264,8 +275,9 @@ def handle_interaction_request(request):
                                         }
                                         print(f"  - Started tool call fragment {index}: id={tool_id}, name={func_name}", file=sys.stderr)
                                         # --- Send Start of JSON Structure ---
-                                        start_json = f'{{"tool_name": "{func_name}", "parameters": {{'
-                                        send_message("stream", session_path, role="tool_json", content=start_json, tool_id=tool_id)
+                                        # Send tool_name explicitly in the message payload, content is now just a marker/empty
+                                        send_message("stream", session_path, role="tool_json",
+                                                     content="", tool_id=tool_id, tool_name=func_name) # Send empty content
                                     else:
                                         print(f"  - Skipping incomplete tool call chunk (missing id or func name): {call_chunk}", file=sys.stderr)
                                         continue # Skip if essential init info is missing
@@ -341,6 +353,17 @@ def handle_interaction_request(request):
                         print(f"  - Error: Unexpected error parsing arguments for tool {func_name} (Index {index}): {parse_err}", file=sys.stderr)
                         # Don't add to tool_calls_extracted on other errors
 
+            # --- Log incomplete fragments if stream error occurred ---
+            if llm_error_occurred and tool_call_fragments:
+                parsed_ids = {call["id"] for call in reconstructed_tool_calls}
+                incomplete_fragments = []
+                for index, fragment in tool_call_fragments.items():
+                    frag_id = fragment.get("id")
+                    if frag_id and frag_id not in parsed_ids:
+                        incomplete_fragments.append(f"Index {index} (ID: {frag_id}, Name: {fragment.get('function', {}).get('name')})")
+                if incomplete_fragments:
+                    print(f"Worker: Detected incomplete tool call fragments likely due to stream error: {', '.join(incomplete_fragments)}", file=sys.stderr)
+
             # Add the assistant message to history *before* executing tools
             # Include reconstructed tool calls if any were generated
             if not llm_error_occurred:
@@ -385,7 +408,8 @@ def handle_interaction_request(request):
                         tool_results_for_history.append({
                             "role": "tool",
                             "tool_call_id": tool_call_id,
-                            "content": tool_result_str # Keep original signal
+                            "name": tool_name,
+                            "content": tool_result_str
                         })
                         break # Stop processing further tools
                     elif tool_result_str == TOOL_DENIED: # Use constant
@@ -395,7 +419,8 @@ def handle_interaction_request(request):
                         tool_results_for_history.append({
                             "role": "tool",
                             "tool_call_id": tool_call_id,
-                            "content": tool_result_str # Keep original signal
+                            "name": tool_name,
+                            "content": tool_result_str
                         })
                         break # Stop processing further tools
                     elif tool_result_str.startswith(TOOL_ERROR_PREFIX): # Use constant
@@ -405,7 +430,8 @@ def handle_interaction_request(request):
                         tool_results_for_history.append({
                             "role": "tool",
                             "tool_call_id": tool_call_id,
-                            "content": tool_result_str # Keep original error
+                            "name": tool_name,
+                            "content": tool_result_str
                         })
                         break # Stop processing further tools
 
@@ -413,8 +439,9 @@ def handle_interaction_request(request):
                     filtered_tool_result = _filter_environment_details(tool_result_str)
                     tool_results_for_history.append({
                         "role": "tool",
-                        "tool_call_id": tool_call_id, # Link result to the specific tool call
-                        "content": filtered_tool_result # Use filtered result content for history
+                        "tool_call_id": tool_call_id,
+                        "name": tool_name,
+                        "content": filtered_tool_result
                     })
 
                 # 5. Add Tool Results to History (potentially including signal messages)
@@ -455,8 +482,8 @@ def handle_interaction_request(request):
                 fragment = tool_call_fragments[index]
                 tool_id = fragment.get("id")
                 if tool_id:
-                    end_json = "}}"
-                    send_message("stream", session_path, role="tool_json_end", content=end_json, tool_id=tool_id)
+                    # Send an empty content marker for the end
+                    send_message("stream", session_path, role="tool_json_end", content="", tool_id=tool_id) # Send empty content
 
         # Signal interaction finished
         # Determine status based on whether an LLM error occurred or max turns were reached

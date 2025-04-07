@@ -91,11 +91,11 @@ class Emigo:
 
         # --- Worker Process Management ---
         self.llm_worker_process: Optional[subprocess.Popen] = None
-        self.llm_worker_reader_thread: Optional[threading.Thread] = None # Initialize to None
-        self.llm_worker_stderr_thread: Optional[threading.Thread] = None # Initialize to None
+        self.llm_worker_reader_thread: Optional[threading.Thread] = None
+        self.llm_worker_stderr_thread: Optional[threading.Thread] = None
         self.llm_worker_lock = threading.Lock()
-        self.worker_output_queue = queue.Queue() # Queue for messages from worker stdout
-        self.pending_tool_requests: Dict[str, Dict] = {} # {request_id: original_tool_request_data}
+        self.worker_output_queue = queue.Queue() # Messages from worker stdout
+        self.pending_tool_requests: Dict[str, Dict] = {} # {request_id (tool_call_id): original_tool_request_data}
         self.active_interaction_session: Optional[str] = None # Track which session is currently interacting
 
         # --- EPC Server Setup ---
@@ -201,25 +201,31 @@ class Emigo:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE, # Capture stderr
                     text=True, # Work with text streams
-                    encoding='utf-8',
-                    bufsize=1, # Line buffered
-                    cwd=os.path.dirname(worker_script_path) # Set CWD to script's directory
+                    encoding='utf-8', # Ensure UTF-8 for JSON
+                    bufsize=0, # Use 0 for unbuffered binary mode (stdin/stdout)
+                    # bufsize=1, # Use 1 for line buffered text mode
+                    cwd=os.path.dirname(worker_script_path), # Set CWD to script's directory
+                    # Use process_group=True on Unix-like systems if needed for cleaner termination
+                    # process_group=True if os.name != 'nt' else False
                 )
                 # Brief pause to see if process exits immediately
-                time.sleep(0.2)
+                time.sleep(0.5) # Increased sleep time
                 if self.llm_worker_process.poll() is not None:
                     print(f"_start_llm_worker: ERROR - LLM worker process exited immediately with code {self.llm_worker_process.poll()}.", file=sys.stderr, flush=True)
                     # Try reading stderr quickly
                     try:
-                        stderr_output = self.llm_worker_process.stderr.read()
+                        stderr_output = self.llm_worker_process.stderr.read() if self.llm_worker_process.stderr else "N/A"
                         print(f"_start_llm_worker: Worker stderr upon exit:\n{stderr_output}", file=sys.stderr, flush=True)
                     except Exception as read_err:
                         print(f"_start_llm_worker: Error reading worker stderr after exit: {read_err}", file=sys.stderr, flush=True)
-                        self.llm_worker_process = None
-                        message_emacs(f"Error: LLM worker process failed to start (exit code {self.llm_worker_process.poll()}). Check *Messages* or Emigo process buffer.")
+
+                    # Regardless of stderr read success, set process to None and notify Emacs
+                    exit_code = self.llm_worker_process.poll() # Get exit code again just in case
+                    self.llm_worker_process = None
+                    message_emacs(f"Error: LLM worker process failed to start (exit code {exit_code}). Check *Messages* or Emigo process buffer.")
                     return # Exit the function
 
-                print(f"_start_llm_worker: LLM worker started (PID: {self.llm_worker_process.pid}).", file=sys.stderr, flush=True) # DEBUG + flush
+                print(f"_start_llm_worker: LLM worker started (PID: {self.llm_worker_process.pid}).", file=sys.stderr, flush=True)
 
                 # Create and start the stdout reader thread *after* process starts
                 print("_start_llm_worker: Starting stdout reader thread...", file=sys.stderr, flush=True) # DEBUG + flush
@@ -295,33 +301,53 @@ class Emigo:
 
     def _read_worker_stdout(self):
         """Reads stdout lines from the worker and puts them in a queue."""
-        while self.llm_worker_process and self.llm_worker_process.stdout:
+        # Use a loop that checks if the process is alive
+        proc = self.llm_worker_process # Local reference
+        if proc and proc.stdout:
             try:
-                line = self.llm_worker_process.stdout.readline()
-                if not line:
-                    print("LLM worker stdout stream ended.", file=sys.stderr)
-                    break # End of stream
-                self.worker_output_queue.put(line.strip())
+                for line in iter(proc.stdout.readline, ''):
+                    if line:
+                        self.worker_output_queue.put(line.strip())
+                    else:
+                        # Empty string indicates EOF (stream closed)
+                        print("LLM worker stdout stream ended (EOF).", file=sys.stderr)
+                        break
+            except ValueError as e:
+                # Catch ValueError: I/O operation on closed file.
+                print(f"Error reading from LLM worker stdout (stream likely closed): {e}", file=sys.stderr)
             except Exception as e:
-                # Handle exceptions during read, e.g., if process dies unexpectedly
+                # Handle other exceptions during read
                 print(f"Error reading from LLM worker stdout: {e}", file=sys.stderr)
-                break
-            # Signal end of output (optional)
-        self.worker_output_queue.put(None)
+            finally:
+                # Ensure the sentinel is put even if errors occur or loop finishes
+                print("Signaling end of worker output.", file=sys.stderr)
+                self.worker_output_queue.put(None)
+        else:
+            print("Worker process or stdout not available for reading.", file=sys.stderr)
+            # Still signal end if the thread was started but process died quickly
+            self.worker_output_queue.put(None)
 
     def _read_worker_stderr(self):
         """Reads and prints stderr lines from the worker."""
-        while self.llm_worker_process and self.llm_worker_process.stderr:
+        # Use a loop that checks if the process is alive
+        proc = self.llm_worker_process # Local reference
+        if proc and proc.stderr:
             try:
-                line = self.llm_worker_process.stderr.readline()
-                if not line:
-                    print("LLM worker stderr stream ended.", file=sys.stderr)
-                    break
-                # Print worker errors clearly marked
-                print(f"[WORKER_STDERR] {line.strip()}", file=sys.stderr)
+                for line in iter(proc.stderr.readline, ''):
+                    if line:
+                        # Print worker errors clearly marked
+                        print(f"[WORKER_STDERR] {line.strip()}", file=sys.stderr, flush=True)
+                    else:
+                        # Empty string indicates EOF
+                        print("LLM worker stderr stream ended (EOF).", file=sys.stderr)
+                        break
+            except ValueError as e:
+                # Catch ValueError: I/O operation on closed file.
+                print(f"Error reading from LLM worker stderr (stream likely closed): {e}", file=sys.stderr)
             except Exception as e:
                 print(f"Error reading from LLM worker stderr: {e}", file=sys.stderr)
-                break
+        else:
+            print("Worker process or stderr not available for reading.", file=sys.stderr)
 
     def _send_to_worker(self, data: Dict):
         """Sends a JSON message to the worker's stdin."""
@@ -338,18 +364,32 @@ class Emigo:
 
             if self.llm_worker_process and self.llm_worker_process.stdin:
                 try:
-                    json_str = json.dumps(data)
-                    # print(f"Sending to worker: {json_str}", file=sys.stderr) # Debug
-                    self.llm_worker_process.stdin.write(json_str + '\n')
+                    json_str = json.dumps(data) + '\n' # Add newline separator
+                    # print(f"Sending to worker: {json_str.strip()}", file=sys.stderr) # Debug
+                    self.llm_worker_process.stdin.write(json_str)
                     self.llm_worker_process.stdin.flush()
-                except (OSError, BrokenPipeError) as e:
-                    print(f"Error sending to LLM worker (Pipe probably closed): {e}", file=sys.stderr)
-                    # Worker might have crashed, try restarting on next send
-                    self._stop_llm_worker()
+                except (OSError, BrokenPipeError, ValueError) as e: # Added ValueError for closed file
+                    print(f"Error sending to LLM worker (Pipe closed or invalid state): {e}", file=sys.stderr)
+                    # Worker has likely crashed or exited. Stop tracking it.
+                    self._stop_llm_worker() # Attempt cleanup, might set self.llm_worker_process to None
+                    # Notify Emacs about the failure
+                    session = data.get("session", "unknown")
+                    eval_in_emacs("emigo--flush-buffer", session, f"[Error: Failed to send message to worker ({e})]", "error")
                 except Exception as e:
-                    print(f"Error sending to LLM worker: {e}", file=sys.stderr)
-            else:
-                print("Cannot send to worker, stdin not available.", file=sys.stderr)
+                    print(f"Unexpected error sending to LLM worker: {e}", file=sys.stderr)
+                    # Also notify Emacs
+                    session = data.get("session", "unknown")
+                    eval_in_emacs("emigo--flush-buffer", session, f"[Error: Unexpected error sending message to worker ({e})]", "error")
+            elif not self.llm_worker_process: # Check if process is None
+                 print("Cannot send to worker, process is not running.", file=sys.stderr)
+                 # Notify Emacs
+                 session = data.get("session", "unknown")
+                 eval_in_emacs("emigo--flush-buffer", session, "[Error: LLM worker process is not running]", "error")
+            else: # Process exists but stdin might be closed
+                 print("Cannot send to worker, stdin not available or closed.", file=sys.stderr)
+                 # Notify Emacs
+                 session = data.get("session", "unknown")
+                 eval_in_emacs("emigo--flush-buffer", session, "[Error: Cannot write to LLM worker process]", "error")
 
 
     def _process_worker_queue(self):
@@ -372,42 +412,51 @@ class Emigo:
                 # print(f"Processing worker message: {message}", file=sys.stderr) # Debug
 
                 if msg_type == "stream":
-                    role = message.get("role", "llm")
-                    content = message.get("content") or "" # Ensure content is never None
+                    role = message.get("role", "llm") # e.g., "llm", "user", "tool_json", "tool_json_args"
+                    content = message.get("content", "") # Default to empty string
+                    tool_id = message.get("tool_id") # Present for tool_json roles
+                    tool_name = message.get("tool_name") # Present for tool_json role
 
-                    # Handle different stream types
-                    if role in ["tool_json", "tool_json_args", "tool_json_end"]:
-                        # Pass JSON fragments directly without filtering
-                        # Include tool_id if present (for args/end roles)
-                        tool_id = message.get("tool_id")
-                        eval_in_emacs("emigo--flush-buffer", session_path, content, role, tool_id)
-                    else:
-                        # Filter non-JSON content (user, llm, error, warning)
+                    # Filter content *unless* it's a tool argument chunk
+                    if role != "tool_json_args":
                         filtered_content = _filter_environment_details(content)
-                        if filtered_content: # Flush only if content remains after filtering
-                            eval_in_emacs("emigo--flush-buffer", session_path, filtered_content, role)
+                    else:
+                        filtered_content = content # Pass tool args unfiltered
+
+                    # Flush to Emacs if content is non-empty OR if it's a tool start marker
+                    if filtered_content or role == "tool_json":
+                        # Pass all relevant info to Elisp
+                        eval_in_emacs("emigo--flush-buffer", session_path, filtered_content, role, tool_id, tool_name)
                     # History is updated via the 'finished' message
 
                 elif msg_type == "tool_request":
-                    request_id = message.get("request_id")
+                    tool_call_id = message.get("request_id") # Worker sends tool_call_id as request_id
                     tool_name = message.get("tool_name")
-                    parameters_dict = message.get("parameters") # Expect 'parameters' dict now
-                    if request_id and tool_name and isinstance(parameters_dict, dict):
-                        # Store request data before executing
-                        self.pending_tool_requests[request_id] = message
-                        # Execute the tool
-                        tool_result = self._handle_tool_request_from_worker(session_path, tool_name, parameters_dict)
-                        # Send result back to worker
+                    parameters_dict = message.get("parameters") # Expect 'parameters' dict
+
+                    if tool_call_id and tool_name and isinstance(parameters_dict, dict):
+                        # Store request data before executing, keyed by tool_call_id
+                        self.pending_tool_requests[tool_call_id] = message
+                        # Execute the tool (handles approval internally)
+                        tool_result_str = self._handle_tool_request_from_worker(session_path, tool_name, parameters_dict)
+                        # Send result back to worker, matching request_id (tool_call_id)
                         self._send_to_worker({
                             "type": "tool_result",
-                            "request_id": request_id,
-                            "result": tool_result # Send the actual result string
+                            "request_id": tool_call_id, # Use the tool_call_id received
+                            "result": tool_result_str # Send the actual result string
                         })
                         # Clean up pending request
-                        if request_id in self.pending_tool_requests:
-                            del self.pending_tool_requests[request_id]
+                        if tool_call_id in self.pending_tool_requests:
+                            del self.pending_tool_requests[tool_call_id]
                     else:
-                        print(f"Invalid tool request from worker: {message}", file=sys.stderr)
+                        print(f"Invalid tool_request from worker: {message}", file=sys.stderr)
+                        # Optionally send an error back to the worker?
+                        if tool_call_id:
+                             self._send_to_worker({
+                                 "type": "tool_result",
+                                 "request_id": tool_call_id,
+                                 "result": tools._format_tool_error("Invalid tool_request message received by main process.")
+                             })
 
                 elif msg_type == "finished":
                     status = message.get("status", "unknown")
