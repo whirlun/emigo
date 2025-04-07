@@ -9,7 +9,7 @@
 ;; Copyright (C) 2025, Emigo, all rights reserved.
 ;; Created: 2025-03-29
 ;; Version: 0.5
-;; Last-Updated: Mon Apr  7 02:27:31 2025 (-0400)
+;; Last-Updated: Mon Apr  7 17:55:18 2025 (-0400)
 ;;           By: Mingde (Matthew) Zeng
 ;; Package-Requires: ((emacs "26.1") (transient "0.3.0") (compat "30.0.2.0") (markdown-mode "2.6"))
 ;; Keywords: ai emacs llm aider ai-pair-programming tools
@@ -341,11 +341,6 @@ Then Emigo will start by gdb, please send new issue with `emigo-name' buffer con
 
 (defun emigo-enable ()
   (add-hook 'post-command-hook #'emigo-start-process))
-
-(defun emigo-read-file-content (filepath)
-  (with-temp-buffer
-    (insert-file-contents filepath)
-    (string-trim (buffer-string))))
 
 (defun emigo-update-header-line (session-path)
   (setq header-line-format (concat

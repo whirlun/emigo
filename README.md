@@ -31,15 +31,13 @@ Please use only for testing and development. Report issues - your feedback helps
     ```emacs-lisp
     (use-package emigo
       :straight (:host github :repo "MatthewZMD/emigo")
-      :autoload emigo-read-file-content
       :config
       (emigo-enable) ;; Starts the background process automatically
       :custom
       ;; Encourage using OpenRouter with Deepseek
       (emigo-model "openrouter/deepseek/deepseek-chat-v3-0324")
       (emigo-base-url "https://openrouter.ai/api/v1")
-      ;; Securely load your API key (replace with your preferred method)
-      (emigo-api-key (emigo-read-file-content "~/.config/openrouter/key.txt")))
+      (emigo-api-key (getenv "OPENROUTER_API_KEY")))
     ```
 
 ## Usage
