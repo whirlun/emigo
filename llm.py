@@ -220,13 +220,42 @@ class LLMClient:
                             yield chunk # Yield the original chunk object
                     except litellm.exceptions.APIConnectionError as e: # Catch specific error
                         # Log the specific error clearly
-                        print(f"\n[LLMClient Stream Error] Caught APIConnectionError: {e}", file=sys.stderr)
+                        # Add more detail from the exception object if possible
+                        error_details = f"Caught APIConnectionError: {e}\n"
+                        # Check for attributes that might hold response data (common in httpx/openai errors)
+                        if hasattr(e, 'response') and e.response:
+                            try:
+                                error_details += f"  Response Status: {getattr(e.response, 'status_code', 'N/A')}\n"
+                                # Limit printing potentially large response content
+                                response_text = getattr(e.response, 'text', '')
+                                error_details += f"  Response Content (first 500 chars): {response_text[:500]}{'...' if len(response_text) > 500 else ''}\n"
+                            except Exception as detail_err: error_details += f"  (Error getting response details: {detail_err})\n"
+                        if hasattr(e, 'request') and e.request:
+                             try:
+                                error_details += f"  Request URL: {getattr(e.request, 'url', 'N/A')}\n"
+                             except Exception as detail_err: error_details += f"  (Error getting request details: {detail_err})\n"
+                        print(f"\n[LLMClient Stream Error] {error_details}", file=sys.stderr)
                         print("[LLMClient Stream Error] Stream may be incomplete.", file=sys.stderr)
                         # Yield an error marker instead of just passing
                         yield {"_stream_error": True, "error_message": str(e)}
                     except Exception as e:
                         # Catch other potential errors during streaming
-                        print(f"\n[LLMClient Stream Error] Caught unexpected error: {e}", file=sys.stderr)
+                        # Add similar detailed logging
+                        error_details = f"Caught unexpected error: {type(e).__name__} - {e}\n"
+                        if hasattr(e, 'response') and e.response:
+                            try:
+                                error_details += f"  Response Status: {getattr(e.response, 'status_code', 'N/A')}\n"
+                                response_text = getattr(e.response, 'text', '')
+                                error_details += f"  Response Content (first 500 chars): {response_text[:500]}{'...' if len(response_text) > 500 else ''}\n"
+                            except Exception as detail_err: error_details += f"  (Error getting response details: {detail_err})\n"
+                        if hasattr(e, 'request') and e.request:
+                             try:
+                                error_details += f"  Request URL: {getattr(e.request, 'url', 'N/A')}\n"
+                             except Exception as detail_err: error_details += f"  (Error getting request details: {detail_err})\n"
+                        # Include traceback for unexpected errors
+                        import traceback
+                        error_details += f"  Traceback:\n{traceback.format_exc()}\n"
+                        print(f"\n[LLMClient Stream Error] {error_details}", file=sys.stderr)
                         # Yield an error marker
                         yield {"_stream_error": True, "error_message": str(e)}
 
