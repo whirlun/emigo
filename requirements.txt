@@ -8,3 +8,4 @@ tqdm
 gitignore_parser
 scipy
 litellm
+orjson
