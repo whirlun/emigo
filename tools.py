@@ -493,17 +493,27 @@ def search_files(session: Session, parameters: Dict[str, Any]) -> str:
 
     abs_path = _resolve_path(session.session_path, rel_path)
     posix_rel_path = _posix_path(rel_path)
+    search_scope_path = abs_path
+    search_scope_desc = posix_rel_path
 
     try:
-        # Call Emacs function to perform the search
+        # Check if the provided path is a file; if so, search its directory
+        if os.path.isfile(abs_path):
+            search_scope_path = os.path.dirname(abs_path)
+            search_scope_desc = _posix_path(os.path.relpath(search_scope_path, session.session_path))
+            print(f"Note: '{posix_rel_path}' is a file. Searching its directory: '{search_scope_desc}'", file=sys.stderr)
+        elif not os.path.isdir(search_scope_path):
+            return _format_tool_error(f"Path not found or is not a directory/file: {posix_rel_path}")
+
+        # Call Emacs function to perform the search in the determined scope
         search_results = get_emacs_func_result(
-            "search-files-sync", abs_path, pattern, case_sensitive, max_matches
+            "search-files-sync", search_scope_path, pattern, case_sensitive, max_matches
         )
 
         if not search_results or search_results.strip() == "":
-             return _format_tool_result(f"No matches found for pattern: {pattern} in '{posix_rel_path}'")
+             return _format_tool_result(f"No matches found for pattern: {pattern} in '{search_scope_desc}'")
 
-        result = f"Found matches for pattern '{pattern}' in '{posix_rel_path}':\n{search_results}"
+        result = f"Found matches for pattern '{pattern}' in '{search_scope_desc}':\n{search_results}"
         # Elisp function should ideally handle truncation notes if applicable
 
         return _format_tool_result(result)
