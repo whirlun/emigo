@@ -341,7 +341,12 @@ def handle_interaction_request(request):
 
                     # Try parsing arguments for execution
                     try:
-                        parameters = json.loads(arguments_str)
+                        stripped_args = arguments_str.strip()
+                        if not stripped_args:
+                            parameters = {} # Treat empty args as an empty dict
+                        else:
+                            parameters = json.loads(stripped_args) # Parse non-empty args
+
                         if isinstance(parameters, dict):
                             tool_call_tuple = (tool_call_id, func_name, parameters)
                             tool_calls_extracted.append(tool_call_tuple)

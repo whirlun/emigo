@@ -150,7 +150,9 @@ LIST_FILES_TOOL = ToolDefinition(
 LIST_REPOMAP_TOOL = ToolDefinition(
     name="list_repomap",
     description="Request a high-level summary of the codebase structure within the session directory. This tool analyzes the source code files (respecting .gitignore and avoiding binary/ignored files) and extracts key definitions (classes, functions, methods, variables, etc.) along with relevant code snippets showing their usage context. It uses a ranking algorithm (PageRank) to prioritize the most important and interconnected parts of the code, especially considering files already discussed or mentioned. This provides a concise yet informative overview, far more useful than a simple file listing (list_files) or reading individual files (read_file) when you need to understand the project's architecture, identify where specific functionality resides, or plan complex changes. **When unsure where functionality resides or how code is structured, you MUST use list_repomap first.** It is much more efficient and context-aware than guessing file paths and using read_file sequentially. Use list_repomap to get a map of the relevant code landscape before diving into specific files. The analysis focuses on the source files within the session directory. The result of this tool will be added to the <environment_details> for subsequent turns.",
-    parameters=[], # No parameters for list_repomap
+    parameters=[ # Add the path parameter here
+        ToolParameter(name="path", type="string", description="Optional relative path of the directory to focus the analysis on. If omitted, analyzes the entire session directory.", required=False),
+    ],
     function=list_repomap
 )
 

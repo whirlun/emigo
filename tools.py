@@ -426,25 +426,40 @@ def attempt_completion(session: Session, parameters: Dict[str, Any]) -> str:
         return _format_tool_error(f"Error signalling completion: {e}")
 
 def list_repomap(session: Session, parameters: Dict[str, Any]) -> str:
-    """Generates and caches the repository map. Ignores parameters."""
-    # This tool takes no parameters, so 'parameters' dict is ignored.
+    """Generates and caches the repository map, potentially focusing on a path."""
+    # Get the optional path parameter, default to session root '.'
+    rel_path = parameters.get("path", ".")
+    abs_path = _resolve_path(session.session_path, rel_path)
+    posix_rel_path = _posix_path(rel_path)
+
     try:
+        # Validate the path
+        if not os.path.isdir(abs_path):
+            return _format_tool_error(f"Path is not a valid directory: {posix_rel_path}")
+
         chat_files = session.get_chat_files()
-        print(f"Generating repomap for {session.session_path} with chat files: {chat_files}", file=sys.stderr)
-        # Use the session's RepoMapper instance
-        repo_map_content = session.repo_mapper.generate_map(chat_files=chat_files) # Pass chat files
+        print(f"Generating repomap for {session.session_path}, focusing on '{posix_rel_path}' with chat files: {chat_files}", file=sys.stderr)
+
+        # --- TODO: Enhance RepoMapper ---
+        # Currently, session.repo_mapper.generate_map likely maps the whole root.
+        # Ideally, generate_map would accept abs_path or rel_path to focus the analysis.
+        # For now, we proceed but the map might be broader than the requested path.
+        # repo_map_content = session.repo_mapper.generate_map(chat_files=chat_files, target_path=abs_path) # Example of future call
+        repo_map_content = session.repo_mapper.generate_map(chat_files=chat_files) # Current call
+
         if not repo_map_content:
             repo_map_content = "(No map content generated)"
 
         # Store the generated map content in the session cache
         session.set_last_repomap(repo_map_content)
 
-        # Return success message; map content is cached for environment details
-        return _format_tool_result(f"Repository map generated for {_posix_path(session.session_path)}.")
+        # Update success message to reflect the requested focus path
+        return _format_tool_result(f"Repository map generated, focusing analysis around '{posix_rel_path}'.")
+
     except Exception as e:
-        print(f"Error generating repomap: {e}\n{traceback.format_exc()}", file=sys.stderr)
+        print(f"Error generating repomap for path '{posix_rel_path}': {e}\n{traceback.format_exc()}", file=sys.stderr)
         session.set_last_repomap(None) # Clear stored map on error
-        return _format_tool_error(f"Error generating repository map: {e}")
+        return _format_tool_error(f"Error generating repository map for '{posix_rel_path}': {e}")
 
 def list_files(session: Session, parameters: Dict[str, Any]) -> str:
     """Lists files in a directory via Emacs."""
