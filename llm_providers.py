@@ -9,13 +9,7 @@ Can be extended to support other providers like Anthropic, Google Gemini, etc.
 """
 
 from typing import List, Dict, Any
-# Import ToolDefinition from the new file
-try:
-    # Use try-except for potential circular import issues if files are structured differently
-    from tool_definitions import ToolDefinition
-except ImportError:
-    # Fallback if direct import fails (adjust path if needed)
-    ToolDefinition = Dict # Use a generic Dict as a fallback type hint
+from tool_definitions import ToolDefinition
 
 def format_tools_for_openai(tools: List[ToolDefinition]) -> List[Dict[str, Any]]:
     """
@@ -33,9 +27,8 @@ def format_tools_for_openai(tools: List[ToolDefinition]) -> List[Dict[str, Any]]
                 "type": param_type,
                 "description": param.get('description', '') # Default description
             }
-            # Add 'items' for array type if needed in the future
-            # if param_type == "array":
-            #     properties[param['name']]['items'] = param.get('items', {"type": "string"}) # Example default
+            if param_type == "array":
+                properties[param['name']]['items'] = param.get('items', {"type": "string"})
 
             if param.get('required', False): # Default to not required
                 required_params.append(param['name'])
