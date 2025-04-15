@@ -4,11 +4,11 @@
 
 # Emigo: Future of Agentic Development in Emacs
 
-Emigo is an intelligent, agentic Emacs-native AI assistant that understands and interacts with your codebase. Brought to you by the creators of [Emacs Application Framework](https://github.com/emacs-eaf/emacs-application-framework) and [lsp-bridge](https://github.com/manateelazycat/lsp-bridge), built on the shoulders of giants like [Cursor](https://www.cursor.com/en), [Aider](https://github.com/paul-gauthier/aider) and [Cline](https://github.com/sturdy-dev/cline), Emigo is the spiritual successor to [Aidermacs](https://github.com/MatthewZMD/aidermacs), reimagined from the ground up for Emacs.
+Emigo intends to be an intelligent, agentic Emacs-native AI assistant that understands and interacts with your codebase. Brought to you by the creators of [Emacs Application Framework](https://github.com/emacs-eaf/emacs-application-framework) and [lsp-bridge](https://github.com/manateelazycat/lsp-bridge), built on the shoulders of giants like [Cursor](https://www.cursor.com/en), [Aider](https://github.com/paul-gauthier/aider) and [Cline](https://github.com/sturdy-dev/cline), Emigo is the spiritual successor to [Aidermacs](https://github.com/MatthewZMD/aidermacs), reimagined from the ground up for Emacs.
 
-## ⚠️ Emigo is under *very* active development. Expect breaking changes, unstable features, incomplete documentation
+## ⚠️ Emigo is under *very* active development, experimentation, and rapid-prototyping ⚠️
 
-Please use only for testing and development. Report issues - your feedback helps shape Emigo!
+The project is at its early-stage. Expect frequent breaking changes and unstable features. Please use only for testing, try it out and report issues - your feedback helps shape Emigo!
 
 ## Key Features
 
