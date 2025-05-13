@@ -901,7 +901,7 @@ class RepoMapper:
         if not os.path.exists(gitignore_path):
             return None
 
-        print(f"Using {gitignore_path}")
+        print(f"Using {gitignore_path}", file=sys.stderr)
         return parse_gitignore(gitignore_path)
 
     def _find_src_files(self, directory):
