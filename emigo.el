@@ -437,7 +437,9 @@ as the session path."
 
 (defun emigo-ensure-window-width ()
   "Restore the saved width of emigo dedicated window."
-  (when (and (emigo-exist-p)
+  (when (and
+             emigo-window-width
+             (emigo-exist-p)
              (window-live-p emigo-window)
              (not (= (window-width emigo-window) emigo-window-width)))
     (window-resize emigo-window
