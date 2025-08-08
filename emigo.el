@@ -50,6 +50,9 @@
 (defcustom emigo-api-key ""
   "API key for AI model.")
 
+(defcustom emigo-extra-headers ""
+  "Custom header for AI model API requests.")
+
 (defcustom emigo-config-location (expand-file-name (locate-user-emacs-file "emigo/"))
   "Directory where emigo will store configuration files."
   :type 'directory)
@@ -227,8 +230,8 @@ Then Emigo will start by gdb, please send new issue with `emigo-name' buffer con
   "Call Python EPC function METHOD and ARGS asynchronously."
   (if (emigo-epc-live-p emigo-epc-process)
       (emigo-deferred-chain
-        ;; Pass args as a list directly
-        (emigo-epc-call-deferred emigo-epc-process (read method) args))
+       ;; Pass args as a list directly
+       (emigo-epc-call-deferred emigo-epc-process (read method) args))
     ;; If process not live, queue the first call details
     (setq emigo-first-call-method method)
     (setq emigo-first-call-args args) ;; Store args as a list
@@ -333,11 +336,11 @@ Then Emigo will start by gdb, please send new issue with `emigo-name' buffer con
   (when (and emigo-first-call-method emigo-first-call-args)
     ;; If first call details exist, execute the deferred call
     (emigo-deferred-chain
-      (emigo-epc-call-deferred emigo-epc-process
-                               (read emigo-first-call-method) ;; Method name
-                               emigo-first-call-args) ;; Pass the stored args list
-      (setq emigo-first-call-method nil)
-      (setq emigo-first-call-args nil))))
+     (emigo-epc-call-deferred emigo-epc-process
+                              (read emigo-first-call-method) ;; Method name
+                              emigo-first-call-args) ;; Pass the stored args list
+     (setq emigo-first-call-method nil)
+     (setq emigo-first-call-args nil))))
 
 (defun emigo-enable ()
   (add-hook 'post-command-hook #'emigo-start-process))
@@ -438,10 +441,10 @@ as the session path."
 (defun emigo-ensure-window-width ()
   "Restore the saved width of emigo dedicated window."
   (when (and
-             emigo-window-width
-             (emigo-exist-p)
-             (window-live-p emigo-window)
-             (not (= (window-width emigo-window) emigo-window-width)))
+         emigo-window-width
+         (emigo-exist-p)
+         (window-live-p emigo-window)
+         (not (= (window-width emigo-window) emigo-window-width)))
     (window-resize emigo-window
                    (- emigo-window-width (window-width emigo-window))
                    t)))

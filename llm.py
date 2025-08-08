@@ -97,6 +97,7 @@ class LLMClient:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         verbose: bool = False,
+        extra_header: Optional[Dict[str, str]] = None,
     ):
         """
         Initializes the LLM client.
@@ -111,6 +112,7 @@ class LLMClient:
         self.api_key = api_key
         self.base_url = base_url
         self.verbose = verbose
+        self.extra_header = extra_header
 
     def send(
         self,
@@ -157,7 +159,8 @@ class LLMClient:
             if "ollama" in self.model_name or (self.base_url and "ollama" in self.base_url):
                  # LiteLLM might handle this automatically, but explicitly setting can help
                  completion_kwargs["model"] = self.model_name.replace("ollama/", "")
-
+        if self.extra_header:
+            completion_kwargs["extra_headers"] = self.extra_header
         try:
             # Store the raw response object for potential parsing later (e.g., tool calls)
             self.last_response_object = None # Initialize

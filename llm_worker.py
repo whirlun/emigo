@@ -111,6 +111,7 @@ def handle_interaction_request(request):
     api_key = config.get("api_key")
     base_url = config.get("base_url")
     verbose = config.get("verbose", False)
+    extra_headers = config.get("extra_headers", {})
 
     if not model_name:
         send_message("error", session_path, message="Missing 'model' in config.")
@@ -121,6 +122,7 @@ def handle_interaction_request(request):
         api_key=api_key,
         base_url=base_url,
         verbose=verbose,
+        extra_headers=extra_headers
     )
     # History is managed locally within this function now.
 

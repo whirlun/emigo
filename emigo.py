@@ -714,12 +714,12 @@ class Emigo:
         environment_details_str = session.get_environment_details_string()
 
         # Get model config (same as emigo_send)
-        vars_result = get_emacs_vars(["emigo-model", "emigo-base-url", "emigo-api-key"])
+        vars_result = get_emacs_vars(["emigo-model", "emigo-base-url", "emigo-api-key", "emigo-extra-headers"])
         if not vars_result or len(vars_result) < 3:
             message_emacs(f"Error retrieving Emacs variables for session {session_path}.")
             self.active_interaction_session = None
             return
-        model, base_url, api_key = vars_result
+        model, base_url, api_key, extra_headers = vars_result
 
         if not model:
             message_emacs(f"Please set emigo-model before starting session {session.session_path}.")
@@ -740,6 +740,7 @@ class Emigo:
             "config": worker_config,
             "chat_files": session_chat_files,
             "environment_details": environment_details_str,
+            "extra_headers": extra_headers
         }
 
        # --- Send request to worker ---
@@ -812,12 +813,12 @@ class Emigo:
         environment_details_str = session.get_environment_details_string()
 
         # Get model config from Emacs vars
-        vars_result = get_emacs_vars(["emigo-model", "emigo-base-url", "emigo-api-key"])
+        vars_result = get_emacs_vars(["emigo-model", "emigo-base-url", "emigo-api-key", "emigo-extra-headers"])
         if not vars_result or len(vars_result) < 3:
             message_emacs(f"Error retrieving Emacs variables for session {session_path}.")
             self.active_interaction_session = None # Unset active session
             return
-        model, base_url, api_key = vars_result
+        model, base_url, api_key, extra_headers = vars_result
 
         if not model:
             message_emacs(f"Please set emigo-model before starting session {session.session_path}.")
@@ -838,7 +839,8 @@ class Emigo:
             "history": session_history, # Pass history snapshot
             "config": worker_config,
             "chat_files": session_chat_files, # Pass chat files snapshot
-            "environment_details": environment_details_str, # Pass generated details
+            "environment_details": environment_details_str, # Pass generated details,
+            "extra_headers": extra_headers # Include any extra headers
         }
 
         # --- Send request to worker ---
